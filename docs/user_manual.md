@@ -25,6 +25,12 @@ The raw data should include:
 
 The plate map should describe what each well contains.
 
+After upload, open **Uploaded Preview** to confirm that HEKBlueR parsed the files correctly.
+
+Open **EDA** before interpreting results. This page checks plate count, well count, missing columns, duplicate wells, missing OD values, saturated OD values, and detected control types.
+
+Open **Cleaned Data** to review blank correction, missing wells, saturated wells, negative corrected values, robust outlier flags, and cleaning actions.
+
 ## 3. Add Metadata
 
 Metadata fields are optional unless marked as required. More metadata gives better reproducibility.
@@ -67,6 +73,8 @@ Use Plate QC to check:
 - missing wells
 - saturated wells
 
+Open **Reference & Calibration** to check reference control stability and inter-plate calibration. HEKBlueR uses an inter-plate calibrator when available. If not available, it can use shared positive controls for plate alignment review.
+
 ## 6. Review Primary Results
 
 Primary Results shows peptide response by dose.
@@ -87,6 +95,8 @@ Curve estimates are weaker when:
 - replicate noise is high
 - viability or interference explains the signal
 
+The detailed curve QC table reports dose count, dynamic range, replicate CV, monotonicity, plateau checks, residual error, and whether the EC50 or IC50 is inside the tested dose range.
+
 ## 8. Review Counter-Assays
 
 Counter-Assays shows whether a hit may be caused by:
@@ -106,3 +116,4 @@ Use Final QC to export:
 
 The export package is designed for later database loading.
 
+Major plots include download buttons. File names are generated from project metadata, target metadata, plot type, and date.

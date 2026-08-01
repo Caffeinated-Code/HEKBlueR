@@ -1,12 +1,27 @@
+hek_theme <- function() {
+  ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(face = "bold", color = "#17324d", margin = ggplot2::margin(b = 10)),
+      axis.title = ggplot2::element_text(color = "#263849"),
+      axis.text = ggplot2::element_text(color = "#334155"),
+      strip.text = ggplot2::element_text(face = "bold", color = "#17324d"),
+      panel.grid.minor = ggplot2::element_blank(),
+      legend.position = "right",
+      legend.key.height = ggplot2::unit(0.55, "cm"),
+      plot.margin = ggplot2::margin(14, 18, 14, 14)
+    )
+}
+
 plate_heatmap_plot <- function(df, value_col = "raw_od", title = "Plate heatmap") {
   ggplot2::ggplot(df, ggplot2::aes(x = as.integer(col), y = row, fill = .data[[value_col]])) +
-    ggplot2::geom_tile(color = "white", linewidth = 0.3) +
+    ggplot2::geom_tile(color = "white", linewidth = 0.45) +
     ggplot2::scale_y_discrete(limits = rev(LETTERS[1:8])) +
     ggplot2::scale_x_continuous(breaks = 1:12) +
-    ggplot2::scale_fill_viridis_c(option = "C", na.value = "grey90") +
-    ggplot2::facet_wrap(~ plate_id) +
+    ggplot2::scale_fill_viridis_c(option = "D", na.value = "grey92", guide = ggplot2::guide_colorbar(barheight = ggplot2::unit(4, "cm"), barwidth = ggplot2::unit(0.45, "cm"))) +
+    ggplot2::facet_wrap(~ plate_id, ncol = 1) +
+    ggplot2::coord_fixed(ratio = 1.05) +
     ggplot2::labs(x = "Column", y = "Row", fill = value_col, title = title) +
-    ggplot2::theme_minimal(base_size = 12)
+    hek_theme()
 }
 
 control_boxplot <- function(df) {
@@ -15,7 +30,7 @@ control_boxplot <- function(df) {
     ggplot2::geom_boxplot(outlier.alpha = 0.5) +
     ggplot2::facet_wrap(~ plate_id, scales = "free_y") +
     ggplot2::labs(x = "Control", y = "Blank-corrected OD", title = "Control behavior") +
-    ggplot2::theme_minimal(base_size = 12) +
+    hek_theme() +
     ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 35, hjust = 1), legend.position = "none")
 }
 
@@ -26,7 +41,8 @@ qc_bar_plot <- function(plate_qc) {
     ggplot2::geom_hline(yintercept = 0.3, linetype = "dotted", color = "#b45309") +
     ggplot2::coord_flip() +
     ggplot2::labs(x = "Plate", y = "Z-prime", title = "Plate QC summary") +
-    ggplot2::theme_minimal(base_size = 12)
+    ggplot2::scale_fill_manual(values = c(PASS = "#2f8f6b", WARN = "#d89b2b", FAIL = "#c94c4c")) +
+    hek_theme()
 }
 
 waterfall_plot <- function(primary) {
@@ -34,12 +50,15 @@ waterfall_plot <- function(primary) {
   metric <- ifelse(primary$assay_mode == "antagonist", primary$inhibition_mean, primary$activation_mean)
   plot_df <- primary
   plot_df$response <- metric
-  ggplot2::ggplot(plot_df, ggplot2::aes(x = stats::reorder(paste(peptide_id, concentration_uM, sep = " "), response), y = response, fill = primary_hit)) +
+  plot_df$label <- paste(plot_df$peptide_id, paste0(plot_df$concentration_uM, " uM"), sep = " | ")
+  ggplot2::ggplot(plot_df, ggplot2::aes(x = stats::reorder(label, response), y = response, fill = primary_hit)) +
     ggplot2::geom_col() +
-    ggplot2::facet_wrap(~ assay_mode, scales = "free_x") +
+    ggplot2::scale_fill_manual(values = c(AGONIST_HIT = "#2f8f6b", ANTAGONIST_HIT = "#3867b7", NO_HIT = "#9aa7b2")) +
+    ggplot2::facet_wrap(~ assay_mode, scales = "free_y") +
     ggplot2::coord_flip() +
     ggplot2::labs(x = "Peptide dose", y = "Normalized response", title = "Primary screen waterfall") +
-    ggplot2::theme_minimal(base_size = 12)
+    hek_theme() +
+    ggplot2::theme(axis.text.y = ggplot2::element_text(size = 8))
 }
 
 dose_response_plot <- function(primary, dose_results) {
@@ -52,7 +71,7 @@ dose_response_plot <- function(primary, dose_results) {
     ggplot2::scale_x_log10() +
     ggplot2::facet_wrap(~ assay_mode) +
     ggplot2::labs(x = "Concentration (uM)", y = "Response", title = "Dose-response summary") +
-    ggplot2::theme_minimal(base_size = 12)
+    hek_theme()
 }
 
 edge_plot <- function(df) {
@@ -62,7 +81,39 @@ edge_plot <- function(df) {
     ggplot2::geom_boxplot() +
     ggplot2::facet_wrap(~ plate_id, scales = "free_y") +
     ggplot2::labs(x = "Plate region", y = "Blank-corrected OD", title = "Edge effect review") +
-    ggplot2::theme_minimal(base_size = 12) +
+    hek_theme() +
     ggplot2::theme(legend.position = "none")
 }
 
+raw_distribution_plot <- function(df) {
+  ggplot2::ggplot(df, ggplot2::aes(x = raw_od, fill = assay_mode)) +
+    ggplot2::geom_histogram(bins = 32, alpha = 0.8, color = "white") +
+    ggplot2::facet_wrap(~ plate_id, scales = "free_y") +
+    ggplot2::labs(x = "Raw OD", y = "Well count", title = "Raw OD distribution") +
+    hek_theme()
+}
+
+replicate_cv_plot <- function(primary) {
+  if (!nrow(primary)) return(ggplot2::ggplot() + ggplot2::theme_void())
+  z <- primary
+  z$cv <- ifelse(z$assay_mode == "antagonist", z$inhibition_cv, z$activation_cv)
+  ggplot2::ggplot(z, ggplot2::aes(x = concentration_uM, y = cv, color = peptide_id)) +
+    ggplot2::geom_point(size = 2) +
+    ggplot2::geom_line() +
+    ggplot2::geom_hline(yintercept = 20, linetype = "dashed", color = "#d89b2b") +
+    ggplot2::scale_x_log10() +
+    ggplot2::facet_wrap(~ assay_mode) +
+    ggplot2::labs(x = "Concentration (uM)", y = "Technical replicate CV (%)", title = "Replicate noise by dose") +
+    hek_theme()
+}
+
+calibration_plot <- function(calibration) {
+  if (!nrow(calibration)) return(ggplot2::ggplot() + ggplot2::theme_void())
+  ggplot2::ggplot(calibration, ggplot2::aes(x = plate_id, y = calibration_factor, fill = calibration_status)) +
+    ggplot2::geom_col() +
+    ggplot2::geom_hline(yintercept = c(-0.15, 0.15), linetype = "dashed", color = "#d89b2b") +
+    ggplot2::coord_flip() +
+    ggplot2::scale_fill_manual(values = c(PASS = "#2f8f6b", WARN = "#d89b2b", FAIL = "#c94c4c")) +
+    ggplot2::labs(x = "Plate", y = "Calibration factor", title = "Inter-plate calibration drift") +
+    hek_theme()
+}

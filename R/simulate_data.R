@@ -79,9 +79,10 @@ simulate_hekblue_demo <- function(seed = 42) {
     }
 
     if (plate$assay_mode == "agonist") {
-      for (r in LETTERS[1:2]) assign_block(r, 1:4, "blank", NA, "blank")
-      for (r in LETTERS[1:2]) assign_block(r, 5:8, "vehicle", NA, "negative_control")
-      for (r in LETTERS[1:2]) assign_block(r, 9:12, "positive_agonist", NA, "positive_control")
+      for (r in LETTERS[1:2]) assign_block(r, 1:3, "blank", NA, "blank")
+      for (r in LETTERS[1:2]) assign_block(r, 4:6, "vehicle", NA, "negative_control")
+      for (r in LETTERS[1:2]) assign_block(r, 7:9, "positive_agonist", NA, "positive_control")
+      for (r in LETTERS[1:2]) assign_block(r, 10:12, "ipc_reference", "PEP-001", "inter_plate_calibrator", 1, 1)
       row_assign <- c("C", "D", "E")
       for (p in seq_along(peptides$peptide_id)) {
         for (j in seq_along(concentrations)) {
@@ -90,13 +91,13 @@ simulate_hekblue_demo <- function(seed = 42) {
           assign_block(row, cols, paste0(peptides$peptide_id[p], "_", concentrations[j], "uM"), peptides$peptide_id[p], "test_sample", concentrations[j], p)
         }
       }
-      assign_block("H", 10:12, "ipc_reference", "PEP-001", "inter_plate_calibrator", 1, 1)
     }
 
     if (plate$assay_mode == "antagonist") {
-      for (r in LETTERS[1:2]) assign_block(r, 1:4, "blank", NA, "blank")
-      for (r in LETTERS[1:2]) assign_block(r, 5:8, "vehicle", NA, "negative_control")
-      for (r in LETTERS[1:2]) assign_block(r, 9:12, "agonist_challenge", NA, "agonist_challenge_control")
+      for (r in LETTERS[1:2]) assign_block(r, 1:3, "blank", NA, "blank")
+      for (r in LETTERS[1:2]) assign_block(r, 4:6, "vehicle", NA, "negative_control")
+      for (r in LETTERS[1:2]) assign_block(r, 7:9, "agonist_challenge", NA, "agonist_challenge_control")
+      for (r in LETTERS[1:2]) assign_block(r, 10:12, "known_antagonist", NA, "known_antagonist_control", 1)
       row_assign <- c("C", "D", "E")
       for (p in seq_along(peptides$peptide_id)) {
         for (j in seq_along(concentrations)) {
@@ -105,7 +106,6 @@ simulate_hekblue_demo <- function(seed = 42) {
           assign_block(row, cols, paste0(peptides$peptide_id[p], "_", concentrations[j], "uM_plus_agonist"), peptides$peptide_id[p], "test_sample", concentrations[j], p)
         }
       }
-      assign_block("H", 9:12, "known_antagonist", NA, "known_antagonist_control", 1)
     }
 
     if (plate$assay_mode == "counter") {

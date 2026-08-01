@@ -8,13 +8,20 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 
 - imports raw HEK-Blue plate-reader data
 - validates plate maps and experimental design
+- previews uploaded raw data, plate maps, and metadata
+- runs input EDA before interpretation
+- creates a cleaned-data review table with cleaning actions
 - checks controls, replicates, dose series, and metadata completeness
 - calculates plate QC metrics
+- checks reference control stability
+- performs inter-plate calibration when a shared calibrator or shared positive control is present
 - normalizes agonist and antagonist responses
 - fits simple dose-response curves
+- reports detailed curve QC, including dose count, curve range, residuals, plateaus, Hill slope, and replicate noise
 - flags noisy or weak curves
 - flags likely assay artifacts
 - creates major review plots
+- exports major plots as named PNG files
 - exports database-ready result tables
 - runs locally through Shiny or in batch through Nextflow
 
@@ -62,9 +69,13 @@ AWS Batch profiles are included in `nextflow.config`.
 |---|---|
 | Start | load demo data and run analysis |
 | Upload | upload raw data, plate map, and metadata |
+| Uploaded Preview | inspect uploaded raw data, plate map, and metadata |
+| EDA | review input-level exploratory checks |
+| Cleaned Data | inspect cleaning actions, outliers, and cleaned wells |
 | Metadata | review run documentation completeness |
 | Design QC | check controls, replicates, dose points, and calibrators |
 | Plate QC | review Z-prime, CV, SSMD, edge effects, and plate bias |
+| Reference & Calibration | review reference control stability and inter-plate calibration |
 | Plate Layout | inspect raw and normalized heatmaps |
 | Primary Results | review activation, inhibition, and hit calls |
 | Secondary Curves | review EC50 or IC50 and curve QC |
@@ -116,4 +127,3 @@ The demo uses simulated raw plate data so the complete QC workflow can be shown 
 - [HEK-Blue TLR8 antagonist protocol](https://pmc.ncbi.nlm.nih.gov/articles/PMC8715332/)
 - [Z-prime factor paper](https://pubmed.ncbi.nlm.nih.gov/10838414/)
 - [Nextflow AWS documentation](https://docs.seqera.io/nextflow/aws)
-

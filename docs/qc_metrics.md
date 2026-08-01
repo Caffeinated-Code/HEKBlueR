@@ -30,6 +30,7 @@ Design QC checks whether the experiment can support interpretation.
 | row bias | row-level drift |
 | column bias | column-level drift |
 | inter-plate calibrator drift | plate-to-plate comparability |
+| robust outlier flag | well-level signal far from plate median |
 
 Starting thresholds:
 
@@ -44,6 +45,7 @@ Starting thresholds:
 Flags:
 
 - `GOOD_CURVE`
+- `LOW_DOSE_COUNT`
 - `WEAK_RESPONSE`
 - `NO_TOP_PLATEAU`
 - `NO_BOTTOM_PLATEAU`
@@ -54,6 +56,20 @@ Flags:
 - `CYTOTOXICITY_CONFOUNDED`
 - `ASSAY_INTERFERENCE`
 - `LOW_CONFIDENCE_HIT`
+
+Detailed dose-response metrics:
+
+| Metric | Meaning |
+|---|---|
+| `n_dose_points` | number of unique concentrations |
+| `dynamic_range` | response max minus response min |
+| `rmse` | average curve residual size |
+| `max_residual` | largest fitted-vs-observed disagreement |
+| `max_replicate_cv` | highest technical replicate CV across doses |
+| `monotonic_violations` | dose steps moving opposite the expected direction |
+| `ec50_in_range` | whether potency estimate is inside tested range |
+| `top_plateau_observed` | whether high response plateau appears covered |
+| `bottom_plateau_observed` | whether low response plateau appears covered |
 
 ## Final Actions
 
@@ -67,4 +83,3 @@ Flags:
 | `FAIL_DESIGN_QC` | missing design elements block interpretation |
 | `LIKELY_ARTIFACT` | counter-assay suggests false activity |
 | `INSUFFICIENT_REPLICATES` | replicate structure is too weak |
-
