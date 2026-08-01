@@ -12,18 +12,26 @@ source("R/analysis.R")
 source("R/plots.R")
 source("R/simulate_data.R")
 
-APP_VERSION <- "0.2.0"
+APP_VERSION <- "0.3.0"
 
 metric_help <- list(
   "Z-prime" = "Z-prime measures separation between positive and negative controls. Values above 0.5 are preferred. Values from 0.3 to 0.5 need review. Lower values usually mean the assay window is weak.",
   "Robust Z-prime" = "Robust Z-prime uses medians and median absolute deviation. It is less sensitive to individual outlier wells.",
   "SSMD" = "SSMD is a standardized difference between control groups. Larger absolute values indicate stronger separation.",
+  "Signal-to-background" = "Signal-to-background compares positive control signal against baseline. Low values mean the assay may have too little dynamic range for reliable screening.",
+  "Signal window" = "Signal window is positive control minus negative control. It is the usable assay range after blank correction.",
   "Control CV" = "Control coefficient of variation measures control stability. Values above 20 percent often indicate pipetting, reagent, incubation, or reader variability.",
   "Replicate CV" = "Replicate CV measures technical replicate noise at a peptide dose. High CV can make hit calls and curve fits unreliable.",
   "Edge effect" = "Edge effect compares edge wells to center wells. A large difference can reflect evaporation, temperature gradients, or plate handling effects.",
+  "Row and column bias" = "Row and column bias checks spatial drift across the plate. This can indicate dispense order, incubation gradient, or reader position effects.",
   "Inter-plate calibration" = "Inter-plate calibration aligns plates using a shared calibrator or shared positive control. Drift above 0.15 OD is flagged for review.",
+  "Reference control stability" = "Reference control stability checks whether shared controls are consistent enough to support normalization and plate comparison.",
   "EC50 or IC50" = "EC50 is the concentration giving half-maximal activation. IC50 is the concentration giving half-maximal inhibition. Estimates are strongest when they sit inside the tested dose range.",
   "Hill slope" = "Hill slope describes curve steepness. Very shallow or very steep slopes can indicate weak biology, noisy data, or fitting instability.",
+  "Dynamic range" = "Dynamic range is the distance between the lowest and highest observed response. Weak dynamic range limits confidence in potency estimates.",
+  "RMSE" = "RMSE summarizes residual error between observed responses and the fitted curve. Lower values indicate a curve that follows the observed data more closely.",
+  "Plateau checks" = "Plateau checks ask whether the tested dose range captures the low and high ends of the curve. Missing plateaus make potency estimates more extrapolated.",
+  "Monotonicity" = "Monotonicity checks whether dose increases generally move response in the expected direction. Strong reversals can indicate noise, toxicity, solubility limits, or mixed mechanisms.",
   "Metadata completeness" = "Metadata completeness tracks how much run documentation was supplied. Complete metadata makes results easier to reproduce, search, and audit."
 )
 
@@ -94,42 +102,84 @@ schema_table <- data.frame(
   stringsAsFactors = FALSE
 )
 
+dose_glossary <- data.frame(
+  QC_metric = c("n_dose_points", "dynamic_range", "rmse", "max_residual", "max_replicate_cv", "monotonic_violations", "ec50_in_range", "top_plateau_observed", "bottom_plateau_observed", "curve_flags"),
+  What_it_means = c(
+    "Number of unique concentrations used for a peptide curve.",
+    "Observed response range across the tested concentration series.",
+    "Average mismatch between observed data and fitted curve.",
+    "Largest observed-vs-fitted curve mismatch.",
+    "Highest technical replicate CV across dose points.",
+    "Number of dose steps that move opposite the expected trend.",
+    "Whether EC50 or IC50 falls inside the tested dose range.",
+    "Whether the high-response plateau appears covered by the data.",
+    "Whether the low-response plateau appears covered by the data.",
+    "Compact list of curve warnings."
+  ),
+  How_to_interpret = c(
+    "Eight or more points is preferred for robust secondary screening.",
+    "Low dynamic range means potency estimates may be unstable.",
+    "Lower RMSE is better. High RMSE means the curve does not explain the data well.",
+    "A high max residual means one dose may be driving the fit.",
+    "Values above 20 to 30 percent indicate noisy technical replicates.",
+    "Multiple violations can indicate noisy data, toxicity, precipitation, or mixed biology.",
+    "TRUE is preferred. FALSE means the potency estimate is extrapolated.",
+    "TRUE is preferred for confident efficacy and potency estimates.",
+    "TRUE is preferred for confident baseline and potency estimates.",
+    "GOOD_CURVE is strongest. Other flags require review before advancing."
+  ),
+  stringsAsFactors = FALSE
+)
+
 ui <- page_navbar(
   title = "HEKBlueR",
   theme = bs_theme(
     version = 5,
-    primary = "#215f7a",
-    secondary = "#6a7583",
-    success = "#2f8f6b",
-    warning = "#d89b2b",
-    danger = "#c94c4c",
+    primary = "#0f766e",
+    secondary = "#5b6d68",
+    success = "#0f766e",
+    warning = "#9a5f22",
+    danger = "#b42318",
     base_font = font_google("Inter"),
     heading_font = font_google("Inter")
   ),
   header = tags$head(tags$style(HTML("
-    body { background: #f4f7f9; color: #1f2d3a; }
-    .navbar { box-shadow: 0 2px 10px rgba(23,50,77,0.12); }
-    .bslib-card { border: 1px solid #d7e2ea; border-radius: 8px; box-shadow: 0 1px 5px rgba(23,50,77,0.05); }
-    .card-header { background: #ffffff; color: #17324d; font-weight: 750; }
-    .metric-card { border: 1px solid #d7e2ea; border-radius: 8px; padding: 14px; background: #ffffff; min-height: 108px; }
-    .metric-label { font-size: 0.84rem; color: #536577; margin-bottom: 4px; }
-    .metric-value { font-size: 1.45rem; font-weight: 760; color: #17324d; }
-    .small-note { font-size: 0.88rem; color: #5d6b7a; }
-    .status-badge { display: inline-block; border-radius: 999px; padding: 0.22rem 0.62rem; font-weight: 750; font-size: 0.78rem; }
-    .status-badge.ok { background: #dff3ea; color: #143f2d; }
-    .status-badge.warn { background: #fff1cc; color: #593a00; }
-    .status-badge.fail { background: #f9d7d7; color: #5b1111; }
-    .status-badge.neutral { background: #e7edf2; color: #263849; }
-    .field-badge { margin-left: 8px; border-radius: 999px; padding: 2px 8px; font-size: 0.72rem; font-weight: 750; }
-    .field-badge.required { background: #dff3ea; color: #143f2d; }
-    .field-badge.optional { background: #e7edf2; color: #314155; }
-    .metric-help { font-weight: 750; color: #215f7a; text-decoration: none; }
+    :root { --bg: #f8fbfa; --bg-soft: #edf6f2; --surface: #ffffff; --surface-strong: #e4f0ec; --text: #16211f; --muted: #5b6d68; --line: #d5e4de; --brand: #0f766e; --brand-dark: #115e59; --accent: #9a5f22; --danger: #b42318; --warn-bg: #fff4dc; --pass-bg: #e1f4ee; --fail-bg: #fde2df; --shadow: 0 18px 52px rgba(22,33,31,0.10); }
+    body { background: var(--bg); color: var(--text); line-height: 1.55; }
+    .navbar { background: color-mix(in srgb, var(--bg) 92%, white); border-bottom: 1px solid var(--line); box-shadow: 0 8px 30px rgba(22,33,31,0.08); }
+    .navbar-brand { font-weight: 850; letter-spacing: 0; color: var(--brand-dark) !important; }
+    .nav-link { font-weight: 720; color: var(--muted) !important; }
+    .nav-link.active { color: var(--brand-dark) !important; }
+    .bslib-card { border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); background: var(--surface); margin-bottom: 1rem; }
+    .card-header { background: var(--surface); color: var(--text); font-weight: 800; border-bottom: 1px solid var(--line); }
+    .hero-band { padding: 1.3rem; border: 1px solid var(--line); border-radius: 8px; background: radial-gradient(circle at top left, color-mix(in srgb, var(--brand) 13%, transparent), transparent 30rem), linear-gradient(180deg, var(--bg-soft), var(--surface)); }
+    .eyebrow { color: var(--brand-dark); font-size: 0.76rem; font-weight: 850; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.35rem; }
+    .metric-card { border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: var(--surface); min-height: 112px; }
+    .metric-label { font-size: 0.82rem; color: var(--muted); margin-bottom: 4px; font-weight: 680; }
+    .metric-value { font-size: 1.45rem; font-weight: 820; color: var(--text); }
+    .small-note { font-size: 0.88rem; color: var(--muted); }
+    .section-note { padding: 0.8rem 1rem; border-left: 4px solid var(--brand); background: var(--bg-soft); border-radius: 6px; color: var(--muted); margin-bottom: 1rem; }
+    .status-badge { display: inline-block; border-radius: 999px; padding: 0.22rem 0.62rem; font-weight: 800; font-size: 0.76rem; }
+    .status-badge.ok { background: var(--pass-bg); color: #143f2d; }
+    .status-badge.warn { background: var(--warn-bg); color: #5e3a05; }
+    .status-badge.fail { background: var(--fail-bg); color: #651b13; }
+    .status-badge.neutral { background: #e7efeb; color: #263934; }
+    .field-badge { margin-left: 8px; border-radius: 999px; padding: 2px 8px; font-size: 0.70rem; font-weight: 820; }
+    .field-badge.required { background: var(--pass-bg); color: #143f2d; }
+    .field-badge.optional { background: #e7efeb; color: #314842; }
+    .metric-help { font-weight: 800; color: var(--brand-dark); text-decoration: none; border-bottom: 1px dotted var(--brand); }
     .download-row { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn { border-radius: 999px; font-weight: 760; }
+    .btn-default, .btn-secondary { border-color: var(--line); background: var(--surface); color: var(--text); }
     .plot-card .html-widget { width: 100% !important; }
+    .form-section-title { font-size: 0.78rem; font-weight: 850; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin: 0.5rem 0 0.75rem; }
+    .tab-content { padding-top: 0.75rem; }
+    table.dataTable thead th { background: var(--surface-strong); color: var(--text); }
     @media (max-width: 900px) {
       .container-fluid { padding-left: 10px; padding-right: 10px; }
       .bslib-grid { grid-template-columns: 1fr !important; }
       .metric-card { min-height: auto; }
+      .navbar-nav { gap: 0.15rem; }
     }
   "))),
   nav_panel(
@@ -137,6 +187,7 @@ ui <- page_navbar(
     layout_columns(
       col_widths = c(7, 5),
       card(
+        class = "hero-band",
         card_header("Automated HEK-Blue screening review"),
         p("Upload raw plate-reader files, plate maps, and metadata. HEKBlueR runs design QC, plate QC, normalization, inter-plate calibration, dose-response review, counter-assay review, and final decision tables."),
         tags$ol(
@@ -167,6 +218,7 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Upload",
+    div(class = "section-note", "Upload raw OD data and plate maps first. Use the metadata form when a metadata CSV is not available. Required fields support reproducibility. Optional fields improve search, audit, and troubleshooting later."),
     card(
       card_header("Expected raw data schema"),
       DTOutput("schema_table")
@@ -180,27 +232,42 @@ ui <- page_navbar(
     card(
       card_header("Metadata form"),
       layout_columns(
-        textInput("scientist", "Scientist name (Required)", ""),
-        textInput("project", "Project (Required)", ""),
-        dateInput("assay_date", "Assay date (Required)", value = Sys.Date()),
-        textInput("target_id", "Target ID (Required)", "TARGET_TLR8_DEMO"),
-        textInput("cell_line", "Cell line (Required)", ""),
-        textInput("protocol_version", "Protocol version (Required)", "v1.0"),
-        numericInput("incubation_hours", "Incubation hours (Required)", value = 18, min = 0),
-        numericInput("readout_nm", "Readout wavelength (Required)", value = 655, min = 400, max = 800),
-        textInput("cell_passage", "Cell passage (Optional)", ""),
-        textInput("cell_lot", "Cell lot (Optional)", ""),
-        textInput("reagent_lot", "QUANTI-Blue lot (Optional)", ""),
-        textInput("instrument", "Instrument (Optional)", "")
+        col_widths = c(6, 6),
+        div(
+          div(class = "form-section-title", "Required documentation"),
+          textInput("scientist", "Scientist name", ""),
+          textInput("project", "Project", ""),
+          dateInput("assay_date", "Assay date", value = Sys.Date()),
+          textInput("target_id", "Target ID", "TARGET_TLR8_DEMO"),
+          textInput("cell_line", "Cell line", ""),
+          textInput("protocol_version", "Protocol version", "v1.0"),
+          numericInput("incubation_hours", "Incubation hours", value = 18, min = 0),
+          numericInput("readout_nm", "Readout wavelength", value = 655, min = 400, max = 800)
+        ),
+        div(
+          div(class = "form-section-title", "Optional but recommended"),
+          textInput("cell_passage", "Cell passage", ""),
+          textInput("cell_lot", "Cell lot", ""),
+          textInput("reagent_lot", "QUANTI-Blue lot", ""),
+          textInput("instrument", "Instrument", ""),
+          textInput("peptide_lot", "Peptide lot", ""),
+          textInput("peptide_purity", "Peptide purity", ""),
+          textInput("vehicle", "Vehicle", ""),
+          textInput("reader_settings", "Plate reader settings", "")
+        )
       ),
       textAreaInput("run_notes", "Notes and protocol deviations (Optional)", "", height = "90px")
     )
   ),
   nav_panel(
     "Uploaded Preview",
-    card(card_header("Raw data preview"), DTOutput("raw_preview")),
-    card(card_header("Plate map preview"), DTOutput("plate_map_preview")),
-    card(card_header("Metadata preview"), DTOutput("metadata_preview"))
+    div(class = "section-note", "Use these tabs to inspect exactly what HEKBlueR parsed before analysis. This keeps large tables navigable."),
+    tabsetPanel(
+      tabPanel("Raw data", card(card_header("Raw data preview"), DTOutput("raw_preview"))),
+      tabPanel("Plate map", card(card_header("Plate map preview"), DTOutput("plate_map_preview"))),
+      tabPanel("Metadata", card(card_header("Metadata preview"), DTOutput("metadata_preview"))),
+      tabPanel("Expected schema", card(card_header("Required and recommended fields"), DTOutput("schema_table_preview")))
+    )
   ),
   nav_panel(
     "EDA",
@@ -218,9 +285,15 @@ ui <- page_navbar(
   nav_panel(
     "Metadata",
     layout_columns(
-      col_widths = c(4, 8),
-      card(card_header(tagList("Completeness ", metric_link("Metadata completeness"))), uiOutput("metadata_card")),
-      card(card_header("Submitted metadata"), DTOutput("metadata_table"))
+      col_widths = c(4, 4, 4),
+      card(card_header(tagList("Overall ", metric_link("Metadata completeness"))), uiOutput("metadata_card")),
+      card(card_header("Required score"), uiOutput("required_metadata_card")),
+      card(card_header("Optional score"), uiOutput("optional_metadata_card"))
+    ),
+    tabsetPanel(
+      tabPanel("All metadata", card(card_header("Submitted metadata"), DTOutput("metadata_table"))),
+      tabPanel("Required fields", card(card_header("Required metadata"), DTOutput("required_metadata_table"))),
+      tabPanel("Optional fields", card(card_header("Optional metadata"), DTOutput("optional_metadata_table")))
     )
   ),
   nav_panel("Design QC", card(card_header("Experimental design review"), DTOutput("design_qc_table"))),
@@ -245,15 +318,25 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Primary Results",
-    card(card_header(tagList("Primary screen table ", metric_link("Replicate CV"))), DTOutput("primary_table")),
-    card(class = "plot-card", card_header("Waterfall plot"), plotlyOutput("waterfall", height = "700px"), div(class = "download-row", downloadButton("download_waterfall", "Download waterfall plot")))
+    div(class = "section-note", "Primary results are split by analysis task so reviewers can move from tables to plots without scrolling through one long page."),
+    tabsetPanel(
+      tabPanel("All results", card(card_header(tagList("Primary screen table ", metric_link("Replicate CV"))), DTOutput("primary_table"))),
+      tabPanel("Agonist", card(card_header("Agonist results"), DTOutput("primary_agonist_table"))),
+      tabPanel("Antagonist", card(card_header("Antagonist results"), DTOutput("primary_antagonist_table"))),
+      tabPanel("Waterfall", card(class = "plot-card", card_header("Interactive waterfall plot"), plotlyOutput("waterfall", height = "720px"), div(class = "download-row", downloadButton("download_waterfall", "Download waterfall plot")))),
+      tabPanel("Replicate noise", card(class = "plot-card", card_header("Replicate CV by dose"), plotlyOutput("primary_replicate_cv_plot", height = "560px"), div(class = "download-row", downloadButton("download_replicate_cv_plot_primary", "Download replicate CV plot"))))
+    )
   ),
   nav_panel(
     "Secondary Curves",
-    card(card_header(tagList("Dose-response results ", metric_link("EC50 or IC50"), " | ", metric_link("Hill slope"))), DTOutput("dose_table")),
-    card(card_header("Detailed curve QC"), DTOutput("dose_qc_table")),
-    card(class = "plot-card", card_header("Dose-response plot"), plotlyOutput("dose_plot", height = "560px"), div(class = "download-row", downloadButton("download_dose_plot", "Download dose-response plot"))),
-    card(class = "plot-card", card_header("Replicate noise by dose"), plotlyOutput("replicate_cv_plot", height = "520px"), div(class = "download-row", downloadButton("download_replicate_cv_plot", "Download replicate CV plot")))
+    div(class = "section-note", "Dose-response is the main review workspace. The fitted curve plot is interactive. QC tables cover potency range, residuals, plateaus, monotonicity, and replicate noise."),
+    tabsetPanel(
+      tabPanel("Interactive curves", card(class = "plot-card", card_header(tagList("Dose-response plot ", metric_link("EC50 or IC50"), " | ", metric_link("Hill slope"))), plotlyOutput("dose_plot", height = "680px"), div(class = "download-row", downloadButton("download_dose_plot", "Download dose-response plot")))),
+      tabPanel("Curve fit table", card(card_header(tagList("Dose-response results ", metric_link("Dynamic range"), " | ", metric_link("RMSE"))), DTOutput("dose_table"))),
+      tabPanel("Curve QC table", card(card_header(tagList("Detailed curve QC ", metric_link("Plateau checks"), " | ", metric_link("Monotonicity"))), DTOutput("dose_qc_table"))),
+      tabPanel("Replicate noise", card(class = "plot-card", card_header(tagList("Replicate noise by dose ", metric_link("Replicate CV"))), plotlyOutput("replicate_cv_plot", height = "560px"), div(class = "download-row", downloadButton("download_replicate_cv_plot", "Download replicate CV plot")))),
+      tabPanel("QC glossary", card(card_header("Dose-response QC explanations"), DTOutput("dose_glossary_table")))
+    )
   ),
   nav_panel(
     "Counter-Assays",
@@ -295,9 +378,9 @@ server <- function(input, output, session) {
 
   metadata_from_form <- reactive({
     data.frame(
-      field = c("scientist", "project", "assay_date", "target_id", "cell_line", "protocol_version", "incubation_hours", "readout_nm", "cell_passage", "cell_lot", "quanti_blue_lot", "instrument", "notes"),
-      value = c(input$scientist, input$project, as.character(input$assay_date), input$target_id, input$cell_line, input$protocol_version, as.character(input$incubation_hours), as.character(input$readout_nm), input$cell_passage, input$cell_lot, input$reagent_lot, input$instrument, input$run_notes),
-      required = c(TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE),
+      field = c("scientist", "project", "assay_date", "target_id", "cell_line", "protocol_version", "incubation_hours", "readout_nm", "cell_passage", "cell_lot", "quanti_blue_lot", "instrument", "peptide_lot", "peptide_purity", "vehicle", "reader_settings", "notes"),
+      value = c(input$scientist, input$project, as.character(input$assay_date), input$target_id, input$cell_line, input$protocol_version, as.character(input$incubation_hours), as.character(input$readout_nm), input$cell_passage, input$cell_lot, input$reagent_lot, input$instrument, input$peptide_lot, input$peptide_purity, input$vehicle, input$reader_settings, input$run_notes),
+      required = c(TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE),
       stringsAsFactors = FALSE
     )
   })
@@ -326,6 +409,7 @@ server <- function(input, output, session) {
   })
 
   output$schema_table <- renderDT(status_datatable(schema_table, NULL, 10))
+  output$schema_table_preview <- renderDT(status_datatable(schema_table, NULL, 10))
 
   output$run_status <- renderUI({
     res <- analysis_results()
@@ -346,10 +430,34 @@ server <- function(input, output, session) {
     div(class = "metric-card", div(class = "metric-label", "Metadata completeness"), div(class = "metric-value", paste0(meta$value, "%")), status_badge(meta$status), div(class = "small-note", paste(meta$required_complete, "of", meta$required_total, "required fields complete")))
   })
 
+  output$required_metadata_card <- renderUI({
+    res <- analysis_results()
+    if (is.null(res)) return(status_badge("NOT RUN"))
+    meta <- res$metadata_completeness
+    div(class = "metric-card", div(class = "metric-label", "Required fields"), div(class = "metric-value", paste0(meta$required_percent, "%")), status_badge(ifelse(meta$required_complete == meta$required_total, "PASS", "FAIL")), div(class = "small-note", paste(meta$required_complete, "of", meta$required_total, "complete")))
+  })
+
+  output$optional_metadata_card <- renderUI({
+    res <- analysis_results()
+    if (is.null(res)) return(status_badge("NOT RUN"))
+    meta <- res$metadata_completeness
+    div(class = "metric-card", div(class = "metric-label", "Optional fields"), div(class = "metric-value", paste0(meta$optional_percent, "%")), status_badge(ifelse(meta$optional_percent >= 80, "PASS", ifelse(meta$optional_percent >= 40, "WARN", "FAIL"))), div(class = "small-note", paste(meta$optional_complete, "of", meta$optional_total, "complete")))
+  })
+
   output$raw_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload raw data."))); status_datatable(head(dat$raw_data, 200), NULL, 12) })
   output$plate_map_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload a plate map."))); status_datatable(head(dat$plate_map, 200), NULL, 12) })
   output$metadata_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or enter metadata."))); status_datatable(dat$metadata, NULL, 15) })
   output$metadata_table <- renderDT({ req(active_inputs()); status_datatable(active_inputs()$metadata, NULL, 15) })
+  output$required_metadata_table <- renderDT({
+    req(active_inputs())
+    md <- active_inputs()$metadata
+    status_datatable(md[md$required %in% c(TRUE, "TRUE", "true", "1"), , drop = FALSE], NULL, 15)
+  })
+  output$optional_metadata_table <- renderDT({
+    req(active_inputs())
+    md <- active_inputs()$metadata
+    status_datatable(md[!(md$required %in% c(TRUE, "TRUE", "true", "1")), , drop = FALSE], NULL, 15)
+  })
   output$eda_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$input_eda, "status", 10) })
   output$cleaned_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$cleaned_well_data, NULL, 20) })
   output$cleaning_summary <- renderDT({
@@ -364,8 +472,19 @@ server <- function(input, output, session) {
   output$reference_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$reference_control_qc, "status", 15) })
   output$calibration_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$interplate_calibration, "calibration_status", 10) })
   output$primary_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$primary_results, "primary_status", 20) })
+  output$primary_agonist_table <- renderDT({
+    req(analysis_results())
+    z <- analysis_results()$primary_results
+    status_datatable(z[z$assay_mode == "agonist", , drop = FALSE], "primary_status", 20)
+  })
+  output$primary_antagonist_table <- renderDT({
+    req(analysis_results())
+    z <- analysis_results()$primary_results
+    status_datatable(z[z$assay_mode == "antagonist", , drop = FALSE], "primary_status", 20)
+  })
   output$dose_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$dose_response_results, NULL, 20) })
   output$dose_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$dose_response_qc, "curve_qc_status", 20) })
+  output$dose_glossary_table <- renderDT(status_datatable(dose_glossary, NULL, 10))
   output$counter_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$counter_assay_qc, "counter_qc_status", 10) })
   output$hit_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$hit_calls, NULL, 20) })
   output$final_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$final_qc_table, "final_status", 20) })
@@ -390,6 +509,7 @@ server <- function(input, output, session) {
   output$control_plot <- renderPlotly(ggplotly(control_plot_obj()))
   output$edge_effect_plot <- renderPlotly(ggplotly(edge_plot_obj()))
   output$replicate_cv_plot <- renderPlotly(ggplotly(replicate_cv_obj()))
+  output$primary_replicate_cv_plot <- renderPlotly(ggplotly(replicate_cv_obj()))
   output$calibration_plot <- renderPlotly(ggplotly(calibration_plot_obj()))
 
   output$custom_plot_controls <- renderUI({
@@ -427,6 +547,7 @@ server <- function(input, output, session) {
   output$download_control_plot <- download_plot(control_plot_obj, "control_behavior", active_inputs)
   output$download_edge_plot <- download_plot(edge_plot_obj, "edge_effect", active_inputs)
   output$download_replicate_cv_plot <- download_plot(replicate_cv_obj, "replicate_cv", active_inputs)
+  output$download_replicate_cv_plot_primary <- download_plot(replicate_cv_obj, "primary_replicate_cv", active_inputs)
   output$download_calibration_plot <- download_plot(calibration_plot_obj, "interplate_calibration", active_inputs)
   output$download_custom_plot <- download_plot(custom_plot_obj, "custom_plot", active_inputs)
 

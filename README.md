@@ -11,6 +11,8 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 - previews uploaded raw data, plate maps, and metadata
 - runs input EDA before interpretation
 - creates a cleaned-data review table with cleaning actions
+- separates table-heavy pages into tabs for easier review
+- scores required and optional metadata completeness separately
 - checks controls, replicates, dose series, and metadata completeness
 - calculates plate QC metrics
 - checks reference control stability
@@ -18,6 +20,7 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 - normalizes agonist and antagonist responses
 - fits simple dose-response curves
 - reports detailed curve QC, including dose count, curve range, residuals, plateaus, Hill slope, and replicate noise
+- provides an interactive dose-response workspace with curve plots, fit tables, QC tables, replicate noise, and QC glossary
 - flags noisy or weak curves
 - flags likely assay artifacts
 - creates major review plots

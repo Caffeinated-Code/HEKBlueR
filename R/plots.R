@@ -65,13 +65,30 @@ dose_response_plot <- function(primary, dose_results) {
   if (!nrow(primary)) return(ggplot2::ggplot() + ggplot2::theme_void())
   plot_df <- primary
   plot_df$response <- ifelse(plot_df$assay_mode == "antagonist", plot_df$inhibition_mean, plot_df$activation_mean)
-  ggplot2::ggplot(plot_df, ggplot2::aes(x = concentration_uM, y = response, color = peptide_id)) +
+  fit_df <- data.frame()
+  if (!is.null(dose_results) && nrow(dose_results)) {
+    usable <- dose_results[is.finite(dose_results$bottom) & is.finite(dose_results$top) & is.finite(dose_results$ec50_ic50) & is.finite(dose_results$hill), ]
+    fit_df <- do.call(rbind, lapply(seq_len(nrow(usable)), function(i) {
+      row <- usable[i, ]
+      source <- plot_df[plot_df$plate_id == row$plate_id & plot_df$assay_mode == row$assay_mode & plot_df$peptide_id == row$peptide_id, ]
+      if (!nrow(source)) return(data.frame())
+      xgrid <- exp(seq(log(min(source$concentration_uM, na.rm = TRUE)), log(max(source$concentration_uM, na.rm = TRUE)), length.out = 120))
+      ygrid <- row$bottom + (row$top - row$bottom) / (1 + (row$ec50_ic50 / xgrid)^row$hill)
+      data.frame(plate_id = row$plate_id, assay_mode = row$assay_mode, peptide_id = row$peptide_id, concentration_uM = xgrid, response = ygrid)
+    }))
+  }
+  p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = concentration_uM, y = response, color = peptide_id)) +
     ggplot2::geom_point(size = 2) +
-    ggplot2::geom_line() +
     ggplot2::scale_x_log10() +
     ggplot2::facet_wrap(~ assay_mode) +
     ggplot2::labs(x = "Concentration (uM)", y = "Response", title = "Dose-response summary") +
     hek_theme()
+  if (nrow(fit_df)) {
+    p <- p + ggplot2::geom_line(data = fit_df, linewidth = 0.9)
+  } else {
+    p <- p + ggplot2::geom_line()
+  }
+  p
 }
 
 edge_plot <- function(df) {
@@ -97,13 +114,14 @@ replicate_cv_plot <- function(primary) {
   if (!nrow(primary)) return(ggplot2::ggplot() + ggplot2::theme_void())
   z <- primary
   z$cv <- ifelse(z$assay_mode == "antagonist", z$inhibition_cv, z$activation_cv)
-  ggplot2::ggplot(z, ggplot2::aes(x = concentration_uM, y = cv, color = peptide_id)) +
+  z$cv_display <- pmin(z$cv, 100)
+  ggplot2::ggplot(z, ggplot2::aes(x = concentration_uM, y = cv_display, color = peptide_id)) +
     ggplot2::geom_point(size = 2) +
     ggplot2::geom_line() +
     ggplot2::geom_hline(yintercept = 20, linetype = "dashed", color = "#d89b2b") +
     ggplot2::scale_x_log10() +
     ggplot2::facet_wrap(~ assay_mode) +
-    ggplot2::labs(x = "Concentration (uM)", y = "Technical replicate CV (%)", title = "Replicate noise by dose") +
+    ggplot2::labs(x = "Concentration (uM)", y = "Technical replicate CV (%), capped at 100 for display", title = "Replicate noise by dose") +
     hek_theme()
 }
 

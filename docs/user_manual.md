@@ -35,6 +35,12 @@ Open **Cleaned Data** to review blank correction, missing wells, saturated wells
 
 Metadata fields are optional unless marked as required. More metadata gives better reproducibility.
 
+The app reports three metadata scores:
+
+- overall completeness
+- required-field completeness
+- optional-field completeness
+
 Recommended metadata:
 
 - scientist
@@ -86,6 +92,14 @@ Antagonist mode reports inhibition.
 ## 7. Review Secondary Curves
 
 Secondary Curves shows EC50 or IC50 estimates and curve flags.
+
+Use the subtabs in this order:
+
+1. Interactive curves
+2. Curve fit table
+3. Curve QC table
+4. Replicate noise
+5. QC glossary
 
 Curve estimates are weaker when:
 

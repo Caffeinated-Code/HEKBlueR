@@ -71,6 +71,8 @@ metadata_completeness <- function(metadata) {
   data.frame(
     metric = "metadata_completeness_percent",
     value = round(100 * complete / max(total, 1), 1),
+    required_percent = round(100 * required_complete / max(nrow(required), 1), 1),
+    optional_percent = round(100 * optional_complete / max(nrow(optional), 1), 1),
     required_complete = required_complete,
     required_total = nrow(required),
     optional_complete = optional_complete,
