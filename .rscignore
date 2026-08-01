@@ -1,0 +1,10 @@
+.git
+.gitignore
+.nextflow*
+work/
+results/
+*.log
+*.zip
+.Rhistory
+.RData
+.Rproj.user/
