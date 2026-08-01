@@ -1,0 +1,12 @@
+.DS_Store
+.Rhistory
+.RData
+.Rproj.user/
+.nextflow*
+work/
+results/
+*.log
+*.html
+*.zip
+__pycache__/
+

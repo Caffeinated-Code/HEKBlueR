@@ -1,0 +1,4 @@
+"peptide_id","peptide_name","expected_role","lot","purity_percent"
+"PEP-001","Demo agonist-like peptide","agonist","P001-A",95
+"PEP-002","Demo antagonist-like peptide","antagonist","P002-A",93
+"PEP-003","Demo artifact-prone peptide","artifact","P003-A",88
