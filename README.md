@@ -74,7 +74,7 @@ AWS Batch profiles are included in `nextflow.config`.
 
 | Tab | Purpose |
 |---|---|
-| Start | load demo data and run analysis |
+| Demo | load demo data and run analysis |
 | Upload | upload raw data, plate map, and metadata |
 | Uploaded Preview | inspect uploaded raw data, plate map, and metadata |
 | EDA | review input-level exploratory checks |

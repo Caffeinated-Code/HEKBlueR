@@ -64,10 +64,9 @@ status_datatable <- function(df, status_col = NULL, page_length = 15) {
   numeric_cols <- names(df)[vapply(df, is.numeric, logical(1))]
   dt <- datatable(
     df,
-    extensions = "FixedHeader",
     filter = "top",
     rownames = FALSE,
-    options = list(pageLength = page_length, scrollX = TRUE, scrollY = "430px", fixedHeader = TRUE)
+    options = list(pageLength = page_length, scrollX = TRUE, scrollY = "48vh", scrollCollapse = TRUE)
   )
   if (length(numeric_cols)) dt <- formatRound(dt, numeric_cols, digits = 4)
   if (!is.null(status_col) && status_col %in% names(df)) {
@@ -186,7 +185,18 @@ ui <- page_navbar(
     .download-row { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
     .btn { border-radius: 999px; font-weight: 760; }
     .btn-default, .btn-secondary { border-color: var(--line); background: var(--surface); color: var(--text); }
-    .plot-card .html-widget { width: 100% !important; }
+    .plot-card { overflow: visible; }
+    .plot-card .card-body { min-height: 360px; }
+    .plot-card .html-widget, .plot-card .shiny-plot-output, .plot-card .js-plotly-plot { width: 100% !important; min-height: 460px !important; height: 460px !important; }
+    .plot-card.plot-tall .card-body { min-height: 720px; }
+    .plot-card.plot-tall .html-widget, .plot-card.plot-tall .shiny-plot-output, .plot-card.plot-tall .js-plotly-plot { min-height: 700px !important; height: 700px !important; }
+    .plot-card.plot-wide .card-body { min-height: 560px; }
+    .plot-card.plot-wide .html-widget, .plot-card.plot-wide .shiny-plot-output, .plot-card.plot-wide .js-plotly-plot { min-height: 540px !important; height: 540px !important; }
+    .upload-compact .bslib-card { box-shadow: none; }
+    .upload-compact .card-body { padding: 0.9rem; }
+    .upload-compact .form-group { margin-bottom: 0.65rem; }
+    .dataTables_scrollBody { border-bottom: 1px solid var(--line); }
+    .dataTables_scrollHead th { position: sticky; top: 0; z-index: 3; }
     .form-section-title { font-size: 0.78rem; font-weight: 850; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin: 0.5rem 0 0.75rem; }
     .tab-content { padding-top: 0.75rem; }
     table.dataTable thead th { background: var(--surface-strong); color: var(--text); }
@@ -211,10 +221,20 @@ ui <- page_navbar(
         $(this).toggleClass('page-search-dim', !hit);
       });
     });
+    $(document).on('shown.bs.tab shown.bs.collapse', function() {
+      setTimeout(function() {
+        window.dispatchEvent(new Event('resize'));
+        if (window.Plotly) {
+          $('.tab-pane.active .js-plotly-plot:visible').each(function() {
+            Plotly.Plots.resize(this);
+          });
+        }
+      }, 200);
+    });
   "))),
   nav_item(tags$div(class = "global-search-wrap", tags$input(id = "page_search", type = "search", class = "form-control", placeholder = "Search current page..."))),
   nav_panel(
-    "Start",
+    "Demo",
     layout_columns(
       col_widths = c(7, 5),
       card(
@@ -250,22 +270,22 @@ ui <- page_navbar(
   nav_panel(
     "Upload",
     div(class = "section-note", "Upload raw OD data and plate maps first. Use the metadata form when a metadata CSV is not available. Required fields support reproducibility. Optional fields improve search, audit, and troubleshooting later."),
-    card(
-      card_header("Expected raw data schema"),
-      DTOutput("schema_table")
-    ),
-    layout_columns(
-      col_widths = c(4, 4, 4),
-      card(card_header(required_header("Raw plate-reader CSV", TRUE)), p(class = "small-note", "Needs one row per well. Required columns are listed above."), fileInput("raw_file", NULL)),
-      card(card_header(required_header("Plate map CSV", TRUE)), p(class = "small-note", "Defines well role, sample, peptide, concentration, and replicate structure."), fileInput("plate_map_file", NULL)),
-      card(card_header(required_header("Run metadata CSV", FALSE)), p(class = "small-note", "Optional if using the form below. Strongly recommended for reproducibility."), fileInput("metadata_file", NULL))
-    ),
-    card(
-      card_header("Metadata form"),
-      layout_columns(
-        col_widths = c(6, 6),
-        div(
-          div(class = "form-section-title", "Required documentation"),
+    tabsetPanel(
+      tabPanel(
+        "Files",
+        layout_columns(
+          class = "upload-compact",
+          col_widths = c(4, 4, 4),
+          card(card_header(required_header("Raw plate-reader CSV", TRUE)), p(class = "small-note", "One row per well. Required columns are listed above."), fileInput("raw_file", NULL, buttonLabel = "Browse", placeholder = "No file selected")),
+          card(card_header(required_header("Plate map CSV", TRUE)), p(class = "small-note", "Well role, sample, peptide, concentration, and replicate structure."), fileInput("plate_map_file", NULL, buttonLabel = "Browse", placeholder = "No file selected")),
+          card(card_header(required_header("Run metadata CSV", FALSE)), p(class = "small-note", "Optional if using the form. Strongly recommended for reproducibility."), fileInput("metadata_file", NULL, buttonLabel = "Browse", placeholder = "No file selected"))
+        )
+      ),
+      tabPanel(
+        "Required Metadata",
+        layout_columns(
+          class = "upload-compact",
+          col_widths = c(4, 4, 4),
           textInput("scientist", "Scientist name", ""),
           textInput("project", "Project", ""),
           dateInput("assay_date", "Assay date", value = Sys.Date()),
@@ -274,9 +294,13 @@ ui <- page_navbar(
           textInput("protocol_version", "Protocol version", "v1.0"),
           numericInput("incubation_hours", "Incubation hours", value = 18, min = 0),
           numericInput("readout_nm", "Readout wavelength", value = 655, min = 400, max = 800)
-        ),
-        div(
-          div(class = "form-section-title", "Optional but recommended"),
+        )
+      ),
+      tabPanel(
+        "Optional Metadata",
+        layout_columns(
+          class = "upload-compact",
+          col_widths = c(4, 4, 4),
           textInput("cell_passage", "Cell passage", ""),
           textInput("cell_lot", "Cell lot", ""),
           textInput("reagent_lot", "QUANTI-Blue lot", ""),
@@ -287,7 +311,17 @@ ui <- page_navbar(
           textInput("reader_settings", "Plate reader settings", "")
         )
       ),
-      textAreaInput("run_notes", "Notes and protocol deviations (Optional)", "", height = "90px")
+      tabPanel(
+        "Notes",
+        card(textAreaInput("run_notes", "Notes and protocol deviations (Optional)", "", height = "150px"))
+      ),
+      tabPanel(
+        "Expected Schema",
+        card(
+          card_header("Expected raw data schema"),
+          DTOutput("schema_table")
+        )
+      )
     )
   ),
   nav_panel(
@@ -310,8 +344,11 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Cleaned Data",
-    card(card_header("Cleaning summary"), DTOutput("cleaning_summary")),
-    card(card_header("Cleaned well data"), DTOutput("cleaned_table"))
+    div(class = "section-note", "Review cleaning actions first, then inspect well-level rows only when a flag needs follow-up."),
+    tabsetPanel(
+      tabPanel("Cleaning summary", card(card_header("Cleaning action counts"), DTOutput("cleaning_summary"))),
+      tabPanel("Well-level review", card(card_header("Cleaned well data"), DTOutput("cleaned_table")))
+    )
   ),
   nav_panel(
     "Metadata",
@@ -349,8 +386,10 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Plate Layout",
-    card(class = "plot-card", card_header("Raw OD heatmap"), plotlyOutput("raw_heatmap", height = "760px"), div(class = "download-row", downloadButton("download_raw_heatmap", "Download raw heatmap"))),
-    card(class = "plot-card", card_header("Normalized heatmap"), plotlyOutput("normalized_heatmap", height = "760px"), div(class = "download-row", downloadButton("download_norm_heatmap", "Download normalized heatmap")))
+    tabsetPanel(
+      tabPanel("Raw OD", card(class = "plot-card plot-tall", card_header("Raw OD heatmap"), plotlyOutput("raw_heatmap", height = "700px"), div(class = "download-row", downloadButton("download_raw_heatmap", "Download raw heatmap")))),
+      tabPanel("Normalized", card(class = "plot-card plot-tall", card_header("Normalized heatmap"), plotlyOutput("normalized_heatmap", height = "700px"), div(class = "download-row", downloadButton("download_norm_heatmap", "Download normalized heatmap"))))
+    )
   ),
   nav_panel(
     "Primary Results",
@@ -360,18 +399,18 @@ ui <- page_navbar(
       tabPanel("Agonist", card(card_header("Agonist results"), DTOutput("primary_agonist_table"))),
       tabPanel("Antagonist", card(card_header("Antagonist results"), DTOutput("primary_antagonist_table"))),
       tabPanel("Sample QC", card(card_header("Sample-level QC summary"), DTOutput("sample_qc_table"))),
-      tabPanel("Waterfall", card(class = "plot-card", card_header("Interactive waterfall plot"), plotlyOutput("waterfall", height = "720px"), div(class = "download-row", downloadButton("download_waterfall", "Download waterfall plot")))),
-      tabPanel("Replicate noise", card(class = "plot-card", card_header("Replicate CV by dose"), plotlyOutput("primary_replicate_cv_plot", height = "560px"), div(class = "download-row", downloadButton("download_replicate_cv_plot_primary", "Download replicate CV plot"))))
+      tabPanel("Waterfall", card(class = "plot-card plot-tall", card_header("Interactive waterfall plot"), plotlyOutput("waterfall", height = "700px"), div(class = "download-row", downloadButton("download_waterfall", "Download waterfall plot")))),
+      tabPanel("Replicate noise", card(class = "plot-card plot-wide", card_header("Replicate CV by dose"), plotlyOutput("primary_replicate_cv_plot", height = "540px"), div(class = "download-row", downloadButton("download_replicate_cv_plot_primary", "Download replicate CV plot"))))
     )
   ),
   nav_panel(
     "Secondary Curves",
     div(class = "section-note", "Dose-response is the main review workspace. The fitted curve plot is interactive. QC tables cover potency range, residuals, plateaus, monotonicity, and replicate noise."),
     tabsetPanel(
-      tabPanel("Interactive curves", card(class = "plot-card", card_header(tagList("Dose-response plot ", metric_link("EC50 or IC50"), " | ", metric_link("Hill slope"))), plotlyOutput("dose_plot", height = "680px"), div(class = "download-row", downloadButton("download_dose_plot", "Download dose-response plot")))),
+      tabPanel("Interactive curves", card(class = "plot-card plot-tall", card_header(tagList("Dose-response plot ", metric_link("EC50 or IC50"), " | ", metric_link("Hill slope"))), plotlyOutput("dose_plot", height = "700px"), div(class = "download-row", downloadButton("download_dose_plot", "Download dose-response plot")))),
       tabPanel("Curve fit table", card(card_header(tagList("Dose-response results ", metric_link("Dynamic range"), " | ", metric_link("RMSE"))), DTOutput("dose_table"))),
       tabPanel("Curve QC table", card(card_header(tagList("Detailed curve QC ", metric_link("Plateau checks"), " | ", metric_link("Monotonicity"))), DTOutput("dose_qc_table"))),
-      tabPanel("Replicate noise", card(class = "plot-card", card_header(tagList("Replicate noise by dose ", metric_link("Replicate CV"))), plotlyOutput("replicate_cv_plot", height = "560px"), div(class = "download-row", downloadButton("download_replicate_cv_plot", "Download replicate CV plot")))),
+      tabPanel("Replicate noise", card(class = "plot-card plot-wide", card_header(tagList("Replicate noise by dose ", metric_link("Replicate CV"))), plotlyOutput("replicate_cv_plot", height = "540px"), div(class = "download-row", downloadButton("download_replicate_cv_plot", "Download replicate CV plot")))),
       tabPanel("QC glossary", card(card_header("Dose-response QC explanations"), DTOutput("dose_glossary_table")))
     )
   ),
@@ -382,13 +421,18 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Plots",
-    layout_columns(
-      col_widths = c(3, 9),
-      card(card_header("Custom plot"), uiOutput("custom_plot_controls"), downloadButton("download_custom_plot", "Download custom plot")),
-      card(class = "plot-card", card_header("Selected plot"), plotlyOutput("custom_plot", height = "620px"))
-    ),
-    card(class = "plot-card", card_header("Control behavior"), plotlyOutput("control_plot", height = "520px"), div(class = "download-row", downloadButton("download_control_plot", "Download control plot"))),
-    card(class = "plot-card", card_header("Edge effect review"), plotlyOutput("edge_effect_plot", height = "520px"), div(class = "download-row", downloadButton("download_edge_plot", "Download edge plot")))
+    tabsetPanel(
+      tabPanel(
+        "Custom",
+        layout_columns(
+          col_widths = c(3, 9),
+          card(card_header("Custom plot"), uiOutput("custom_plot_controls"), downloadButton("download_custom_plot", "Download custom plot")),
+          card(class = "plot-card plot-wide", card_header("Selected plot"), plotlyOutput("custom_plot", height = "540px"))
+        )
+      ),
+      tabPanel("Controls", card(class = "plot-card plot-wide", card_header("Control behavior"), plotlyOutput("control_plot", height = "540px"), div(class = "download-row", downloadButton("download_control_plot", "Download control plot")))),
+      tabPanel("Edge Effects", card(class = "plot-card plot-wide", card_header("Edge effect review"), plotlyOutput("edge_effect_plot", height = "540px"), div(class = "download-row", downloadButton("download_edge_plot", "Download edge plot"))))
+    )
   ),
   nav_panel(
     "Final QC",

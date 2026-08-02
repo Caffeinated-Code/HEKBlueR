@@ -1,6 +1,6 @@
 # User Manual
 
-## 1. Start
+## 1. Demo
 
 Open the app and click **Load demo data**. Click **Run analysis**.
 
