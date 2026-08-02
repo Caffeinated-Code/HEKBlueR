@@ -2,6 +2,8 @@
 
 HEKBlueR has four QC layers.
 
+The active thresholds are defined in `R/qc_thresholds.R` and exported as `qc_thresholds.csv` with each run. This keeps the app, command-line workflow, and Nextflow workflow aligned.
+
 ## Design QC
 
 Design QC checks whether the experiment can support interpretation.
@@ -83,3 +85,19 @@ Detailed dose-response metrics:
 | `FAIL_DESIGN_QC` | missing design elements block interpretation |
 | `LIKELY_ARTIFACT` | counter-assay suggests false activity |
 | `INSUFFICIENT_REPLICATES` | replicate structure is too weak |
+
+## Sample-Level QC
+
+`sample_qc_table.csv` reports one row per target, peptide, and assay mode.
+
+| Column | Meaning |
+|---|---|
+| `sample_status` | PASS, WARN, or FAIL summary for the sample |
+| `n_doses` | number of tested concentrations |
+| `max_replicate_cv` | highest meaningful replicate CV across dose points |
+| `hit_calls` | primary agonist or antagonist hit call |
+| `curve_status` | curve QC status for secondary review |
+| `artifact_flags` | counter-assay evidence for cytotoxicity or assay interference |
+| `review_notes` | concise explanation of why the row was flagged |
+
+Low near-zero responses are not failed solely because percent CV is unstable around a tiny mean. Replicate CV is treated as decision-critical when the response is large enough to support biological interpretation.

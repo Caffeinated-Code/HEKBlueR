@@ -31,6 +31,7 @@ on.exit(setwd(old_wd), add = TRUE)
 
 suppressPackageStartupMessages({
   source("R/qc_metrics.R")
+  source("R/qc_thresholds.R")
   source("R/export.R")
   source("R/analysis.R")
 })
@@ -39,6 +40,6 @@ raw_data <- read.csv(raw_path, stringsAsFactors = FALSE)
 plate_map <- read.csv(plate_map_path, stringsAsFactors = FALSE)
 metadata <- read.csv(metadata_path, stringsAsFactors = FALSE)
 
-results <- run_hekblue_analysis(raw_data, plate_map, metadata, output_dir = out_dir)
+results <- run_hekblue_analysis(raw_data, plate_map, metadata, output_dir = out_dir, thresholds = default_qc_thresholds())
 message("Analysis complete: ", out_dir)
 print(results$final_qc_table)

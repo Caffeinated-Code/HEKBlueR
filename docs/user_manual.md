@@ -31,6 +31,8 @@ Open **EDA** before interpreting results. This page checks plate count, well cou
 
 Open **Cleaned Data** to review blank correction, missing wells, saturated wells, negative corrected values, robust outlier flags, and cleaning actions.
 
+Use the search box in the top navigation bar to highlight matching text on the current page. Every table also has column filters and a table search box. These are useful for `target_id`, `assay_mode`, `peptide_id`, `control_type`, status columns, and reviewer notes.
+
 ## 3. Add Metadata
 
 Metadata fields are optional unless marked as required. More metadata gives better reproducibility.
@@ -67,6 +69,8 @@ A warning does not always mean the assay failed. It means the interpretation nee
 
 ## 5. Review Plate QC
 
+Open **QC Thresholds** before reviewing automated flags. This page lists the rules used for metadata, design, plate quality, primary hit calls, dose-response review, and counter-assay artifacts.
+
 Use Plate QC to check:
 
 - Z-prime
@@ -88,6 +92,8 @@ Primary Results shows peptide response by dose.
 Agonist mode reports activation.
 
 Antagonist mode reports inhibition.
+
+Open the **Sample QC** subtab for one row per target, peptide, and assay mode. This table reports PASS, WARN, and FAIL calls based on primary replicate noise, dose-response QC, and counter-assay artifacts.
 
 ## 7. Review Secondary Curves
 
@@ -131,3 +137,9 @@ Use Final QC to export:
 The export package is designed for later database loading.
 
 Major plots include download buttons. File names are generated from project metadata, target metadata, plot type, and date.
+
+## 10. Analysis Cache
+
+The app separates analysis from display. The analysis engine lives in the R modules under `R/`. The Shiny app calls that engine and displays the returned tables and plots.
+
+When **Run analysis** is clicked, the app computes a signature from the raw data, plate map, and metadata. If those inputs have not changed during the current app session, HEKBlueR reuses the cached result object. Searches, tab changes, plot downloads, and interface updates do not rerun the analysis.

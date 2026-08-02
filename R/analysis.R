@@ -2,6 +2,32 @@ source_if_needed <- function(path) {
   if (file.exists(path)) source(path)
 }
 
+enrich_raw_with_plate_map <- function(raw_data, plate_map) {
+  join_cols <- intersect(c("plate_id", "well"), intersect(names(raw_data), names(plate_map)))
+  if (!all(c("plate_id", "well") %in% join_cols)) return(raw_data)
+  extra_cols <- setdiff(
+    intersect(c("target_id", "biological_replicate", "technical_replicate"), names(plate_map)),
+    names(raw_data)
+  )
+  if (!length(extra_cols)) return(raw_data)
+  merge(raw_data, plate_map[c(join_cols, extra_cols)], by = join_cols, all.x = TRUE, sort = FALSE)
+}
+
+fill_target_id <- function(df, metadata) {
+  metadata_target <- if (all(c("field", "value") %in% names(metadata))) {
+    metadata$value[match("target_id", metadata$field)]
+  } else {
+    NA_character_
+  }
+  if (!"target_id" %in% names(df)) df$target_id <- NA_character_
+  df$target_id[is.na(df$target_id) | df$target_id == ""] <- ifelse(
+    is.na(metadata_target) || metadata_target == "",
+    "UNKNOWN_TARGET",
+    metadata_target
+  )
+  df
+}
+
 clean_well_data <- function(raw_data) {
   df <- raw_data
   df$row <- substr(df$well, 1, 1)
@@ -61,13 +87,16 @@ input_eda <- function(raw_data, plate_map) {
   )
 }
 
-metadata_completeness <- function(metadata) {
+metadata_completeness <- function(metadata, thresholds = default_qc_thresholds()) {
   required <- metadata[metadata$required %in% c(TRUE, "TRUE", "true", "1"), , drop = FALSE]
   optional <- metadata[!metadata$field %in% required$field, , drop = FALSE]
   required_complete <- sum(!is.na(required$value) & required$value != "")
   optional_complete <- sum(!is.na(optional$value) & optional$value != "")
   total <- nrow(metadata)
   complete <- sum(!is.na(metadata$value) & metadata$value != "")
+  pass_cutoff <- thresholds$metadata$completeness_pass_percent
+  warn_cutoff <- thresholds$metadata$completeness_warn_percent
+  total_percent <- 100 * complete / max(total, 1)
   data.frame(
     metric = "metadata_completeness_percent",
     value = round(100 * complete / max(total, 1), 1),
@@ -77,12 +106,14 @@ metadata_completeness <- function(metadata) {
     required_total = nrow(required),
     optional_complete = optional_complete,
     optional_total = nrow(optional),
-    status = ifelse(required_complete == nrow(required) && complete / max(total, 1) >= 0.8, "PASS", ifelse(complete / max(total, 1) >= 0.5, "WARN", "FAIL")),
+    pass_threshold_percent = pass_cutoff,
+    warn_threshold_percent = warn_cutoff,
+    status = ifelse(required_complete == nrow(required) && total_percent >= pass_cutoff, "PASS", ifelse(total_percent >= warn_cutoff, "WARN", "FAIL")),
     stringsAsFactors = FALSE
   )
 }
 
-validate_design <- function(plate_map, metadata) {
+validate_design <- function(plate_map, metadata, thresholds = default_qc_thresholds()) {
   controls <- split(plate_map, plate_map$plate_id)
   out <- lapply(names(controls), function(pid) {
     x <- controls[[pid]]
@@ -119,20 +150,20 @@ validate_design <- function(plate_map, metadata) {
       status <- "FAIL"
       reasons <- c(reasons, paste("missing controls:", paste(missing_controls, collapse = ",")))
     }
-    if (!is.na(min_tech) && min_tech < 3) {
+    if (!is.na(min_tech) && min_tech < thresholds$design$technical_replicates_pass) {
       status <- ifelse(status == "FAIL", "FAIL", "WARN")
-      reasons <- c(reasons, "technical replicates below 3")
+      reasons <- c(reasons, paste("technical replicates below", thresholds$design$technical_replicates_pass))
     }
-    if (!is.na(min_doses) && assay_mode %in% c("agonist", "antagonist") && min_doses < 8) {
-      status <- ifelse(min_doses < 5, "FAIL", ifelse(status == "FAIL", "FAIL", "WARN"))
-      reasons <- c(reasons, "dose-response has fewer than 8 concentrations")
+    if (!is.na(min_doses) && assay_mode %in% c("agonist", "antagonist") && min_doses < thresholds$design$dose_points_pass) {
+      status <- ifelse(min_doses < thresholds$design$dose_points_warn, "FAIL", ifelse(status == "FAIL", "FAIL", "WARN"))
+      reasons <- c(reasons, paste("dose-response has fewer than", thresholds$design$dose_points_pass, "concentrations"))
     }
-    if (min_control_wells < 4) {
+    if (min_control_wells < thresholds$design$control_wells_fail) {
       status <- "FAIL"
       reasons <- c(reasons, "too few required control wells")
-    } else if (min_control_wells < 8 && status != "FAIL") {
+    } else if (min_control_wells < thresholds$design$control_wells_pass && status != "FAIL") {
       status <- "WARN"
-      reasons <- c(reasons, "control wells below preferred count of 8")
+      reasons <- c(reasons, paste("control wells below preferred count of", thresholds$design$control_wells_pass))
     }
     if (!ipc_present && assay_mode != "antagonist" && status != "FAIL") {
       status <- "WARN"
@@ -146,19 +177,22 @@ validate_design <- function(plate_map, metadata) {
       min_control_wells = min_control_wells,
       min_technical_replicates = min_tech,
       min_dose_points = min_doses,
+      technical_replicate_threshold = thresholds$design$technical_replicates_pass,
+      dose_points_pass_threshold = thresholds$design$dose_points_pass,
+      control_wells_pass_threshold = thresholds$design$control_wells_pass,
       inter_plate_calibrator_present = ipc_present,
       notes = paste(reasons, collapse = "; "),
       stringsAsFactors = FALSE
     )
   })
   design <- do.call(rbind, out)
-  meta <- metadata_completeness(metadata)
+  meta <- metadata_completeness(metadata, thresholds)
   design$metadata_status <- meta$status
   design$metadata_completeness_percent <- meta$value
   design
 }
 
-calculate_plate_qc <- function(cleaned) {
+calculate_plate_qc <- function(cleaned, thresholds = default_qc_thresholds()) {
   plates <- split(cleaned, cleaned$plate_id)
   out <- lapply(names(plates), function(pid) {
     x <- plates[[pid]]
@@ -174,22 +208,22 @@ calculate_plate_qc <- function(cleaned) {
     col_bias <- col_bias_score(x)
     status <- "PASS"
     notes <- character()
-    if (is.na(zp) || zp < 0.3) {
+    if (is.na(zp) || zp < thresholds$plate$z_prime_warn) {
       status <- "FAIL"
-      notes <- c(notes, "Z-prime below 0.3")
-    } else if (zp < 0.5) {
+      notes <- c(notes, paste("Z-prime below", thresholds$plate$z_prime_warn))
+    } else if (zp < thresholds$plate$z_prime_pass) {
       status <- "WARN"
-      notes <- c(notes, "Z-prime below 0.5")
+      notes <- c(notes, paste("Z-prime below", thresholds$plate$z_prime_pass))
     }
-    if (!is.na(cv_percent(pos)) && cv_percent(pos) > 20) {
+    if (!is.na(cv_percent(pos)) && cv_percent(pos) > thresholds$plate$control_cv_warn_percent) {
       status <- ifelse(status == "FAIL", "FAIL", "WARN")
-      notes <- c(notes, "positive control CV above 20%")
+      notes <- c(notes, paste("positive control CV above", paste0(thresholds$plate$control_cv_warn_percent, "%")))
     }
-    if (!is.na(cv_percent(neg)) && cv_percent(neg) > 20) {
+    if (!is.na(cv_percent(neg)) && cv_percent(neg) > thresholds$plate$control_cv_warn_percent) {
       status <- ifelse(status == "FAIL", "FAIL", "WARN")
-      notes <- c(notes, "negative control CV above 20%")
+      notes <- c(notes, paste("negative control CV above", paste0(thresholds$plate$control_cv_warn_percent, "%")))
     }
-    if (!is.na(edge) && edge > 0.15) {
+    if (!is.na(edge) && edge > thresholds$plate$edge_effect_warn) {
       status <- ifelse(status == "FAIL", "FAIL", "WARN")
       notes <- c(notes, "edge effect detected")
     }
@@ -206,6 +240,10 @@ calculate_plate_qc <- function(cleaned) {
       negative_control_cv = round(cv_percent(neg), 2),
       blank_cv = round(cv_percent(blank), 2),
       edge_effect = round(edge, 3),
+      z_prime_pass_threshold = thresholds$plate$z_prime_pass,
+      z_prime_warn_threshold = thresholds$plate$z_prime_warn,
+      control_cv_warn_threshold = thresholds$plate$control_cv_warn_percent,
+      edge_effect_warn_threshold = thresholds$plate$edge_effect_warn,
       row_bias = round(row_bias, 3),
       column_bias = round(col_bias, 3),
       saturated_wells = sum(x$saturated_flag, na.rm = TRUE),
@@ -217,21 +255,23 @@ calculate_plate_qc <- function(cleaned) {
   do.call(rbind, out)
 }
 
-reference_control_qc <- function(cleaned) {
+reference_control_qc <- function(cleaned, thresholds = default_qc_thresholds()) {
   control_types <- c("negative_control", "positive_control", "agonist_challenge_control", "known_antagonist_control", "inter_plate_calibrator")
   x <- cleaned[cleaned$control_type %in% control_types, ]
   if (!nrow(x)) return(data.frame())
   agg <- aggregate(blank_corrected_od ~ plate_id + control_type, x, function(v) c(mean = safe_mean(v), median = safe_median(v), cv = cv_percent(v), n = sum(!is.na(v))))
   out <- cbind(agg[c("plate_id", "control_type")], as.data.frame(agg$blank_corrected_od))
   names(out)[3:6] <- c("mean_od", "median_od", "cv_percent", "n_wells")
-  out$status <- ifelse(out$n_wells < 4, "FAIL", ifelse(out$cv_percent > 20, "WARN", "PASS"))
+  out$status <- ifelse(out$n_wells < thresholds$design$control_wells_fail, "FAIL", ifelse(out$cv_percent > thresholds$plate$control_cv_warn_percent, "WARN", "PASS"))
+  out$min_wells_threshold <- thresholds$design$control_wells_fail
+  out$cv_warn_threshold <- thresholds$plate$control_cv_warn_percent
   out$interpretation <- ifelse(out$status == "PASS", "Control is stable enough for normalization.",
     ifelse(out$status == "WARN", "Control variability is high. Review plate handling and pipetting.", "Too few control wells for reliable normalization.")
   )
   out
 }
 
-interplate_calibration <- function(cleaned) {
+interplate_calibration <- function(cleaned, thresholds = default_qc_thresholds()) {
   calibrator <- cleaned[cleaned$control_type == "inter_plate_calibrator", ]
   method <- "inter_plate_calibrator"
   if (!nrow(calibrator)) {
@@ -240,7 +280,7 @@ interplate_calibration <- function(cleaned) {
   }
   if (!nrow(calibrator)) {
     return(list(
-      factors = data.frame(plate_id = unique(cleaned$plate_id), calibration_method = "none", calibration_factor = 1, calibration_status = "WARN", notes = "No shared calibrator or positive control found."),
+      factors = data.frame(plate_id = unique(cleaned$plate_id), calibration_method = "none", calibration_factor = 1, calibration_drift_warn_threshold = thresholds$plate$calibration_drift_warn_od, calibration_status = "WARN", notes = "No shared calibrator or positive control found."),
       calibrated = transform(cleaned, calibrated_od = blank_corrected_od)
     ))
   }
@@ -249,8 +289,9 @@ interplate_calibration <- function(cleaned) {
   med$calibration_method <- method
   med$calibration_factor <- global - med$blank_corrected_od
   med$calibrator_median_od <- med$blank_corrected_od
-  med$calibration_status <- ifelse(abs(med$calibration_factor) <= 0.15, "PASS", "WARN")
-  med$notes <- ifelse(med$calibration_status == "PASS", "Plate is aligned with shared reference.", "Plate shows calibration drift above 0.15 OD.")
+  med$calibration_drift_warn_threshold <- thresholds$plate$calibration_drift_warn_od
+  med$calibration_status <- ifelse(abs(med$calibration_factor) <= thresholds$plate$calibration_drift_warn_od, "PASS", "WARN")
+  med$notes <- ifelse(med$calibration_status == "PASS", "Plate is aligned with shared reference.", paste("Plate shows calibration drift above", thresholds$plate$calibration_drift_warn_od, "OD."))
   med$blank_corrected_od <- NULL
   calibrated <- merge(cleaned, med[c("plate_id", "calibration_factor")], by = "plate_id", all.x = TRUE)
   calibrated$calibration_factor[is.na(calibrated$calibration_factor)] <- 0
@@ -275,15 +316,17 @@ normalize_responses <- function(cleaned) {
   do.call(rbind, out)
 }
 
-summarize_primary <- function(normalized) {
+summarize_primary <- function(normalized, thresholds = default_qc_thresholds()) {
   test <- normalized[normalized$control_type == "test_sample", ]
   if (!nrow(test)) return(data.frame())
-  keys <- unique(test[c("plate_id", "assay_mode", "peptide_id", "concentration_uM")])
+  if (!"target_id" %in% names(test)) test$target_id <- NA_character_
+  keys <- unique(test[c("plate_id", "assay_mode", "target_id", "peptide_id", "concentration_uM")])
   result <- do.call(rbind, lapply(seq_len(nrow(keys)), function(i) {
     key <- keys[i, ]
     x <- test[
       test$plate_id == key$plate_id &
         test$assay_mode == key$assay_mode &
+        test$target_id == key$target_id &
         test$peptide_id == key$peptide_id &
         test$concentration_uM == key$concentration_uM,
     ]
@@ -301,12 +344,24 @@ summarize_primary <- function(normalized) {
       stringsAsFactors = FALSE
     )
   }))
+  active_cv <- ifelse(result$assay_mode == "antagonist", result$inhibition_cv, result$activation_cv)
+  active_mean <- ifelse(result$assay_mode == "antagonist", result$inhibition_mean, result$activation_mean)
+  interpretable_cv <- is.finite(active_cv) & abs(active_mean) >= 10
   result$primary_hit <- with(result, ifelse(
-    assay_mode == "agonist" & activation_mean >= 50 & activation_cv <= 25,
+    assay_mode == "agonist" & activation_mean >= thresholds$primary$agonist_hit_percent & activation_cv <= thresholds$primary$replicate_cv_warn_percent,
     "AGONIST_HIT",
-    ifelse(assay_mode == "antagonist" & inhibition_mean >= 50 & inhibition_cv <= 25, "ANTAGONIST_HIT", "NO_HIT")
+    ifelse(assay_mode == "antagonist" & inhibition_mean >= thresholds$primary$antagonist_hit_percent & inhibition_cv <= thresholds$primary$replicate_cv_warn_percent, "ANTAGONIST_HIT", "NO_HIT")
   ))
-  result$primary_status <- ifelse(result$primary_hit == "NO_HIT", "PASS", "WARN")
+  result$primary_status <- ifelse(
+    interpretable_cv & active_cv > thresholds$primary$replicate_cv_fail_percent,
+    "FAIL",
+    ifelse(result$primary_hit != "NO_HIT" | (interpretable_cv & active_cv > thresholds$primary$replicate_cv_warn_percent), "WARN", "PASS")
+  )
+  result$primary_rule <- paste0(
+    "hit >= ", ifelse(result$assay_mode == "antagonist", thresholds$primary$antagonist_hit_percent, thresholds$primary$agonist_hit_percent),
+    "% and replicate CV <= ", thresholds$primary$replicate_cv_warn_percent,
+    "%; FAIL if CV > ", thresholds$primary$replicate_cv_fail_percent, "%"
+  )
   result
 }
 
@@ -326,14 +381,15 @@ fit_one_curve <- function(df, response_col) {
   list(coef = coef(fit), rmse = sqrt(mean((y - pred)^2, na.rm = TRUE)), residual_max = max(abs(y - pred), na.rm = TRUE))
 }
 
-fit_dose_response <- function(primary) {
+fit_dose_response <- function(primary, thresholds = default_qc_thresholds()) {
   if (!nrow(primary)) return(list(results = data.frame(), qc = data.frame()))
-  keys <- unique(primary[c("plate_id", "assay_mode", "peptide_id")])
+  if (!"target_id" %in% names(primary)) primary$target_id <- NA_character_
+  keys <- unique(primary[c("plate_id", "assay_mode", "target_id", "peptide_id")])
   rows <- list()
   qc <- list()
   for (i in seq_len(nrow(keys))) {
     key <- keys[i, ]
-    x <- primary[primary$plate_id == key$plate_id & primary$peptide_id == key$peptide_id, ]
+    x <- primary[primary$plate_id == key$plate_id & primary$assay_mode == key$assay_mode & primary$target_id == key$target_id & primary$peptide_id == key$peptide_id, ]
     response_col <- if (key$assay_mode == "antagonist") "inhibition_mean" else "activation_mean"
     fit <- fit_one_curve(x, response_col)
     response <- x[[response_col]]
@@ -352,7 +408,7 @@ fit_dose_response <- function(primary) {
     if (!is.finite(max_rep_cv)) max_rep_cv <- NA_real_
     if (is.null(fit)) {
       rows[[i]] <- data.frame(key, n_dose_points = n_dose_points, bottom = NA, top = NA, ec50_ic50 = NA, hill = NA, response_min = round(response_min, 4), response_max = round(response_max, 4), dynamic_range = round(dynamic_range, 4), rmse = NA, max_residual = NA, curve_status = "FIT_FAILED")
-      qc[[i]] <- data.frame(key, curve_qc_status = "FAIL", n_dose_points = n_dose_points, max_replicate_cv = round(max_rep_cv, 4), monotonic_violations = monotonic_violations, dynamic_range = round(dynamic_range, 4), ec50_in_range = FALSE, top_plateau_observed = FALSE, bottom_plateau_observed = FALSE, curve_flags = "FIT_FAILED")
+      qc[[i]] <- data.frame(key, curve_qc_status = "FAIL", n_dose_points = n_dose_points, max_replicate_cv = round(max_rep_cv, 4), monotonic_violations = monotonic_violations, dynamic_range = round(dynamic_range, 4), ec50_in_range = FALSE, top_plateau_observed = FALSE, bottom_plateau_observed = FALSE, dose_points_pass_threshold = thresholds$curve$dose_points_pass, replicate_cv_warn_threshold = thresholds$curve$replicate_cv_warn_percent, dynamic_range_warn_threshold = thresholds$curve$dynamic_range_warn_percent, curve_flags = "FIT_FAILED")
       next
     }
     coef <- fit$coef
@@ -360,16 +416,16 @@ fit_dose_response <- function(primary) {
     dose_max <- max(x$concentration_uM, na.rm = TRUE)
     flags <- character()
     ec50_in_range <- coef["ec50"] >= dose_min && coef["ec50"] <= dose_max
-    top_plateau <- abs(response_max - coef["top"]) <= 20
-    bottom_plateau <- abs(response_min - coef["bottom"]) <= 20
-    if (n_dose_points < 8) flags <- c(flags, "LOW_DOSE_COUNT")
+    top_plateau <- abs(response_max - coef["top"]) <= thresholds$curve$plateau_tolerance_percent
+    bottom_plateau <- abs(response_min - coef["bottom"]) <= thresholds$curve$plateau_tolerance_percent
+    if (n_dose_points < thresholds$curve$dose_points_pass) flags <- c(flags, "LOW_DOSE_COUNT")
     if (!ec50_in_range) flags <- c(flags, "EC50_OUT_OF_RANGE")
-    if (abs(coef["top"] - coef["bottom"]) < 30) flags <- c(flags, "WEAK_RESPONSE")
+    if (abs(coef["top"] - coef["bottom"]) < thresholds$curve$dynamic_range_warn_percent) flags <- c(flags, "WEAK_RESPONSE")
     if (!top_plateau) flags <- c(flags, "NO_TOP_PLATEAU")
     if (!bottom_plateau) flags <- c(flags, "NO_BOTTOM_PLATEAU")
-    if (abs(coef["hill"]) > 4 || abs(coef["hill"]) < 0.2) flags <- c(flags, "BAD_HILL_SLOPE")
-    if (monotonic_violations > 1) flags <- c(flags, "NON_MONOTONIC")
-    high_noise <- !is.na(max_rep_cv) && max_rep_cv > 30
+    if (abs(coef["hill"]) > thresholds$curve$hill_max || abs(coef["hill"]) < thresholds$curve$hill_min) flags <- c(flags, "BAD_HILL_SLOPE")
+    if (monotonic_violations > thresholds$curve$monotonic_violations_warn) flags <- c(flags, "NON_MONOTONIC")
+    high_noise <- !is.na(max_rep_cv) && max_rep_cv > thresholds$curve$replicate_cv_warn_percent
     if (high_noise) flags <- c(flags, "HIGH_REPLICATE_NOISE")
     status <- ifelse(length(flags) == 0, "PASS", ifelse(any(flags %in% c("FIT_FAILED", "LOW_DOSE_COUNT", "EC50_OUT_OF_RANGE", "WEAK_RESPONSE")), "WARN", "WARN"))
     rows[[i]] <- data.frame(
@@ -387,33 +443,39 @@ fit_dose_response <- function(primary) {
       curve_status = ifelse(status == "PASS", "GOOD_CURVE", "REVIEW_CURVE"),
       stringsAsFactors = FALSE
     )
-    qc[[i]] <- data.frame(key, curve_qc_status = status, n_dose_points = n_dose_points, max_replicate_cv = round(max_rep_cv, 4), monotonic_violations = monotonic_violations, dynamic_range = round(dynamic_range, 4), ec50_in_range = ec50_in_range, top_plateau_observed = top_plateau, bottom_plateau_observed = bottom_plateau, curve_flags = ifelse(length(flags), paste(flags, collapse = ";"), "GOOD_CURVE"))
+    qc[[i]] <- data.frame(key, curve_qc_status = status, n_dose_points = n_dose_points, max_replicate_cv = round(max_rep_cv, 4), monotonic_violations = monotonic_violations, dynamic_range = round(dynamic_range, 4), ec50_in_range = ec50_in_range, top_plateau_observed = top_plateau, bottom_plateau_observed = bottom_plateau, dose_points_pass_threshold = thresholds$curve$dose_points_pass, replicate_cv_warn_threshold = thresholds$curve$replicate_cv_warn_percent, dynamic_range_warn_threshold = thresholds$curve$dynamic_range_warn_percent, curve_flags = ifelse(length(flags), paste(flags, collapse = ";"), "GOOD_CURVE"))
   }
   list(results = do.call(rbind, rows), qc = do.call(rbind, qc))
 }
 
-counter_assay_qc <- function(normalized) {
+counter_assay_qc <- function(normalized, thresholds = default_qc_thresholds()) {
   x <- normalized[normalized$assay_mode == "counter" & !is.na(normalized$peptide_id), ]
   if (!nrow(x)) return(data.frame())
-  peptides <- unique(x$peptide_id)
-  out <- lapply(peptides, function(p) {
-    z <- x[x$peptide_id == p, ]
+  if (!"target_id" %in% names(x)) x$target_id <- NA_character_
+  keys <- unique(x[c("target_id", "peptide_id")])
+  out <- lapply(seq_len(nrow(keys)), function(i) {
+    key <- keys[i, ]
+    z <- x[x$target_id == key$target_id & x$peptide_id == key$peptide_id, ]
     viability <- safe_mean(z$raw_od[z$control_type == "viability_counter"])
     no_cell <- safe_mean(z$raw_od[z$control_type == "no_cell_interference"])
     unrelated <- safe_mean(z$raw_od[z$control_type == "unrelated_reporter"])
     null_cell <- safe_mean(z$raw_od[z$control_type == "null_cell_reporter"])
     flags <- character()
-    if (!is.na(viability) && viability < 0.7) flags <- c(flags, "CYTOTOXICITY_CONFOUNDED")
-    if (!is.na(no_cell) && no_cell > 0.25) flags <- c(flags, "ASSAY_INTERFERENCE")
-    if (!is.na(unrelated) && unrelated > 0.4) flags <- c(flags, "UNRELATED_REPORTER_ACTIVITY")
-    if (!is.na(null_cell) && null_cell > 0.35) flags <- c(flags, "NULL_CELL_ACTIVITY")
+    if (!is.na(viability) && viability < thresholds$counter$viability_min_od) flags <- c(flags, "CYTOTOXICITY_CONFOUNDED")
+    if (!is.na(no_cell) && no_cell > thresholds$counter$no_cell_max_od) flags <- c(flags, "ASSAY_INTERFERENCE")
+    if (!is.na(unrelated) && unrelated > thresholds$counter$unrelated_reporter_max_od) flags <- c(flags, "UNRELATED_REPORTER_ACTIVITY")
+    if (!is.na(null_cell) && null_cell > thresholds$counter$null_cell_max_od) flags <- c(flags, "NULL_CELL_ACTIVITY")
     data.frame(
-      peptide_id = p,
+      key,
       counter_qc_status = ifelse(length(flags), "WARN", "PASS"),
       viability_signal = round(viability, 3),
       no_cell_signal = round(no_cell, 3),
       unrelated_reporter_signal = round(unrelated, 3),
       null_cell_signal = round(null_cell, 3),
+      viability_min_threshold = thresholds$counter$viability_min_od,
+      no_cell_max_threshold = thresholds$counter$no_cell_max_od,
+      unrelated_reporter_max_threshold = thresholds$counter$unrelated_reporter_max_od,
+      null_cell_max_threshold = thresholds$counter$null_cell_max_od,
       artifact_flags = ifelse(length(flags), paste(flags, collapse = ";"), "NONE"),
       stringsAsFactors = FALSE
     )
@@ -421,14 +483,62 @@ counter_assay_qc <- function(normalized) {
   do.call(rbind, out)
 }
 
+sample_qc_summary <- function(primary, dose_qc, counter_qc) {
+  if (!nrow(primary)) return(data.frame())
+  groups <- unique(primary[c("target_id", "peptide_id", "assay_mode")])
+  out <- lapply(seq_len(nrow(groups)), function(i) {
+    key <- groups[i, ]
+    p_primary <- primary[primary$target_id == key$target_id & primary$peptide_id == key$peptide_id & primary$assay_mode == key$assay_mode, , drop = FALSE]
+    p_curve <- dose_qc[dose_qc$target_id == key$target_id & dose_qc$peptide_id == key$peptide_id & dose_qc$assay_mode == key$assay_mode, , drop = FALSE]
+    p_counter <- counter_qc[counter_qc$target_id == key$target_id & counter_qc$peptide_id == key$peptide_id, , drop = FALSE]
+    sample_status <- "PASS"
+    reasons <- character()
+    if (any(p_primary$primary_status == "FAIL", na.rm = TRUE)) {
+      sample_status <- "FAIL"
+      reasons <- c(reasons, "primary replicate QC failed")
+    } else if (any(p_primary$primary_status == "WARN", na.rm = TRUE)) {
+      sample_status <- "WARN"
+      reasons <- c(reasons, "primary hit or replicate QC warning")
+    }
+    if (nrow(p_curve) && any(p_curve$curve_qc_status == "FAIL", na.rm = TRUE)) {
+      sample_status <- "FAIL"
+      reasons <- c(reasons, "curve QC failed")
+    } else if (nrow(p_curve) && any(p_curve$curve_qc_status == "WARN", na.rm = TRUE) && sample_status != "FAIL") {
+      sample_status <- "WARN"
+      reasons <- c(reasons, "curve QC warning")
+    }
+    if (nrow(p_counter) && any(!p_counter$artifact_flags %in% c("NONE", NA), na.rm = TRUE)) {
+      sample_status <- "FAIL"
+      reasons <- c(reasons, "counter-assay artifact flag")
+    }
+    active_cv <- ifelse(p_primary$assay_mode == "antagonist", p_primary$inhibition_cv, p_primary$activation_cv)
+    data.frame(
+      key,
+      sample_status = sample_status,
+      n_doses = length(unique(p_primary$concentration_uM)),
+      max_replicate_cv = round(max(active_cv, na.rm = TRUE), 4),
+      hit_calls = paste(unique(p_primary$primary_hit[p_primary$primary_hit != "NO_HIT"]), collapse = ";"),
+      curve_status = ifelse(nrow(p_curve), paste(unique(p_curve$curve_qc_status), collapse = ";"), "NOT_RUN"),
+      artifact_flags = ifelse(nrow(p_counter), paste(unique(p_counter$artifact_flags), collapse = ";"), "NOT_TESTED"),
+      review_notes = paste(reasons, collapse = "; "),
+      stringsAsFactors = FALSE
+    )
+  })
+  result <- do.call(rbind, out)
+  result$hit_calls[result$hit_calls == ""] <- "NO_HIT"
+  row.names(result) <- NULL
+  result
+}
+
 make_final_qc <- function(design_qc, plate_qc, dose_qc, counter_qc, primary) {
-  peptides <- unique(primary$peptide_id)
-  out <- lapply(peptides, function(p) {
-    p_primary <- primary[primary$peptide_id == p, ]
+  peptides <- unique(primary[c("target_id", "peptide_id")])
+  out <- lapply(seq_len(nrow(peptides)), function(i) {
+    key <- peptides[i, ]
+    p_primary <- primary[primary$target_id == key$target_id & primary$peptide_id == key$peptide_id, ]
     true_hits <- unique(p_primary$primary_hit[p_primary$primary_hit != "NO_HIT"])
     hit <- ifelse(length(true_hits), paste(true_hits, collapse = ";"), "NO_HIT")
-    p_curve <- dose_qc[dose_qc$peptide_id == p, , drop = FALSE]
-    p_counter <- counter_qc[counter_qc$peptide_id == p, , drop = FALSE]
+    p_curve <- dose_qc[dose_qc$target_id == key$target_id & dose_qc$peptide_id == key$peptide_id, , drop = FALSE]
+    p_counter <- counter_qc[counter_qc$target_id == key$target_id & counter_qc$peptide_id == key$peptide_id, , drop = FALSE]
     artifact <- if (nrow(p_counter)) p_counter$artifact_flags[1] else "NOT_TESTED"
     final <- "PASS_ADVANCE"
     if (hit == "NO_HIT") final <- "NO_ADVANCE"
@@ -436,7 +546,7 @@ make_final_qc <- function(design_qc, plate_qc, dose_qc, counter_qc, primary) {
     if (!artifact %in% c("NONE", "NOT_TESTED")) final <- "LIKELY_ARTIFACT"
     data.frame(
       final_status = ifelse(final %in% c("PASS_ADVANCE", "NO_ADVANCE"), "PASS", ifelse(final == "LIKELY_ARTIFACT", "FAIL", "WARN")),
-      peptide_id = p,
+      key,
       hit_call = hit,
       curve_qc = ifelse(nrow(p_curve), paste(unique(p_curve$curve_qc_status), collapse = ";"), "NOT_RUN"),
       counter_assay_qc = ifelse(nrow(p_counter), p_counter$counter_qc_status[1], "NOT_RUN"),
@@ -451,24 +561,30 @@ make_final_qc <- function(design_qc, plate_qc, dose_qc, counter_qc, primary) {
     stringsAsFactors = FALSE
   )
   final <- do.call(rbind, out)
+  row.names(final) <- NULL
   cbind(plate_summary[rep(1, nrow(final)), ], final)
 }
 
-run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NULL) {
+run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NULL, thresholds = default_qc_thresholds()) {
+  raw_data <- enrich_raw_with_plate_map(raw_data, plate_map)
+  raw_data <- fill_target_id(raw_data, metadata)
+  plate_map <- fill_target_id(plate_map, metadata)
   cleaned <- clean_well_data(raw_data)
   eda <- input_eda(raw_data, plate_map)
-  design <- validate_design(plate_map, metadata)
-  plate <- calculate_plate_qc(cleaned)
-  ref_qc <- reference_control_qc(cleaned)
-  calibration <- interplate_calibration(cleaned)
+  design <- validate_design(plate_map, metadata, thresholds)
+  plate <- calculate_plate_qc(cleaned, thresholds)
+  ref_qc <- reference_control_qc(cleaned, thresholds)
+  calibration <- interplate_calibration(cleaned, thresholds)
   normalized <- normalize_responses(calibration$calibrated)
-  primary <- summarize_primary(normalized)
-  dose <- fit_dose_response(primary)
-  counter <- counter_assay_qc(normalized)
+  primary <- summarize_primary(normalized, thresholds)
+  dose <- fit_dose_response(primary, thresholds)
+  counter <- counter_assay_qc(normalized, thresholds)
+  sample_qc <- sample_qc_summary(primary, dose$qc, counter)
   final <- make_final_qc(design, plate, dose$qc, counter, primary)
   exclusions <- cleaned[cleaned$saturated_flag | cleaned$negative_corrected_flag | cleaned$missing_flag, ]
   results <- list(
-    metadata_completeness = metadata_completeness(metadata),
+    qc_thresholds = qc_threshold_table(thresholds),
+    metadata_completeness = metadata_completeness(metadata, thresholds),
     input_eda = eda,
     cleaned_well_data = cleaned,
     interplate_calibration = calibration$factors,
@@ -477,6 +593,7 @@ run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NUL
     design_qc = design,
     plate_qc = plate,
     primary_results = primary,
+    sample_qc_table = sample_qc,
     dose_response_results = dose$results,
     dose_response_qc = dose$qc,
     counter_assay_qc = counter,

@@ -25,9 +25,7 @@ export_hekblue_results <- function(results, raw_data, plate_map, metadata, outpu
     c(
       "assay_type: HEK-Blue SEAP reporter",
       "normalization: blank correction plus control scaling",
-      "z_prime_pass: 0.5",
-      "control_cv_warn_percent: 20",
-      "replicate_cv_warn_percent: 20",
+      "threshold_source: R/qc_thresholds.R",
       "curve_model: four_parameter_logistic_base_R",
       "outputs_are_database_ready: true"
     ),
@@ -35,4 +33,3 @@ export_hekblue_results <- function(results, raw_data, plate_map, metadata, outpu
   )
   invisible(output_dir)
 }
-

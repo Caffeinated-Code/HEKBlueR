@@ -7,12 +7,13 @@ suppressPackageStartupMessages({
 })
 
 source("R/qc_metrics.R")
+source("R/qc_thresholds.R")
 source("R/export.R")
 source("R/analysis.R")
 source("R/plots.R")
 source("R/simulate_data.R")
 
-APP_VERSION <- "0.3.0"
+APP_VERSION <- "0.4.0"
 
 metric_help <- list(
   "Z-prime" = "Z-prime measures separation between positive and negative controls. Values above 0.5 are preferred. Values from 0.3 to 0.5 need review. Lower values usually mean the assay window is weak.",
@@ -65,6 +66,7 @@ status_datatable <- function(df, status_col = NULL, page_length = 15) {
     df,
     extensions = "FixedHeader",
     filter = "top",
+    rownames = FALSE,
     options = list(pageLength = page_length, scrollX = TRUE, scrollY = "430px", fixedHeader = TRUE)
   )
   if (length(numeric_cols)) dt <- formatRound(dt, numeric_cols, digits = 4)
@@ -78,6 +80,13 @@ status_datatable <- function(df, status_col = NULL, page_length = 15) {
     )
   }
   dt
+}
+
+analysis_signature <- function(dat) {
+  tmp <- tempfile(fileext = ".rds")
+  saveRDS(dat, tmp, version = 2)
+  on.exit(unlink(tmp), add = TRUE)
+  unname(tools::md5sum(tmp))
 }
 
 download_plot <- function(plot_expr, prefix, active_inputs) {
@@ -131,6 +140,8 @@ dose_glossary <- data.frame(
   stringsAsFactors = FALSE
 )
 
+threshold_glossary <- qc_threshold_table()
+
 ui <- page_navbar(
   title = "HEKBlueR",
   theme = bs_theme(
@@ -168,6 +179,10 @@ ui <- page_navbar(
     .field-badge.required { background: var(--pass-bg); color: #143f2d; }
     .field-badge.optional { background: #e7efeb; color: #314842; }
     .metric-help { font-weight: 800; color: var(--brand-dark); text-decoration: none; border-bottom: 1px dotted var(--brand); }
+    .global-search-wrap { min-width: min(28rem, 82vw); padding: 0.35rem 0.6rem; }
+    .global-search-wrap input { border: 1px solid var(--line); border-radius: 999px; padding: 0.45rem 0.9rem; font-size: 0.9rem; }
+    .page-search-hit { outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent); outline-offset: 2px; }
+    .page-search-dim { opacity: 0.38; }
     .download-row { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
     .btn { border-radius: 999px; font-weight: 760; }
     .btn-default, .btn-secondary { border-color: var(--line); background: var(--surface); color: var(--text); }
@@ -180,8 +195,24 @@ ui <- page_navbar(
       .bslib-grid { grid-template-columns: 1fr !important; }
       .metric-card { min-height: auto; }
       .navbar-nav { gap: 0.15rem; }
+      .global-search-wrap { width: 100%; padding-left: 0; }
     }
+  ")),
+  tags$script(HTML("
+    $(document).on('input', '#page_search', function() {
+      var q = String(this.value || '').toLowerCase().trim();
+      var activePane = $('.tab-pane.active');
+      var searchable = activePane.find('.bslib-card, .metric-card, .section-note, .tab-content');
+      searchable.removeClass('page-search-hit page-search-dim');
+      if (!q) return;
+      searchable.each(function() {
+        var hit = $(this).text().toLowerCase().indexOf(q) >= 0;
+        $(this).toggleClass('page-search-hit', hit);
+        $(this).toggleClass('page-search-dim', !hit);
+      });
+    });
   "))),
+  nav_item(tags$div(class = "global-search-wrap", tags$input(id = "page_search", type = "search", class = "form-control", placeholder = "Search current page..."))),
   nav_panel(
     "Start",
     layout_columns(
@@ -298,6 +329,11 @@ ui <- page_navbar(
   ),
   nav_panel("Design QC", card(card_header("Experimental design review"), DTOutput("design_qc_table"))),
   nav_panel(
+    "QC Thresholds",
+    div(class = "section-note", "These thresholds drive the automated QC status columns. Exported result packages include the same threshold table for traceability."),
+    card(card_header("Active QC thresholds"), DTOutput("threshold_table"))
+  ),
+  nav_panel(
     "Plate QC",
     card(card_header(tagList("QC metrics: ", metric_link("Z-prime"), " | ", metric_link("Robust Z-prime"), " | ", metric_link("SSMD"), " | ", metric_link("Control CV"), " | ", metric_link("Edge effect"))), DTOutput("plate_qc_table")),
     card(class = "plot-card", card_header("Z-prime summary"), plotlyOutput("qc_plot", height = "430px"), div(class = "download-row", downloadButton("download_qc_plot", "Download Z-prime plot")))
@@ -323,6 +359,7 @@ ui <- page_navbar(
       tabPanel("All results", card(card_header(tagList("Primary screen table ", metric_link("Replicate CV"))), DTOutput("primary_table"))),
       tabPanel("Agonist", card(card_header("Agonist results"), DTOutput("primary_agonist_table"))),
       tabPanel("Antagonist", card(card_header("Antagonist results"), DTOutput("primary_antagonist_table"))),
+      tabPanel("Sample QC", card(card_header("Sample-level QC summary"), DTOutput("sample_qc_table"))),
       tabPanel("Waterfall", card(class = "plot-card", card_header("Interactive waterfall plot"), plotlyOutput("waterfall", height = "720px"), div(class = "download-row", downloadButton("download_waterfall", "Download waterfall plot")))),
       tabPanel("Replicate noise", card(class = "plot-card", card_header("Replicate CV by dose"), plotlyOutput("primary_replicate_cv_plot", height = "560px"), div(class = "download-row", downloadButton("download_replicate_cv_plot_primary", "Download replicate CV plot"))))
     )
@@ -364,6 +401,7 @@ server <- function(input, output, session) {
   demo_loaded <- reactiveVal(FALSE)
   analysis_results <- reactiveVal(NULL)
   active_inputs <- reactiveVal(NULL)
+  analysis_cache <- reactiveValues(signature = NULL, results = NULL, inputs = NULL, message = "No analysis has been run in this session.")
 
   lapply(names(metric_help), function(label) {
     observeEvent(input[[paste0("help_", gsub("[^A-Za-z0-9]", "_", label))]], {
@@ -402,10 +440,21 @@ server <- function(input, output, session) {
   observeEvent(input$run_analysis, {
     dat <- get_inputs()
     validate(need(!is.null(dat), "Load demo data or upload raw files first."))
-    results <- run_hekblue_analysis(dat$raw_data, dat$plate_map, dat$metadata)
+    sig <- analysis_signature(dat)
+    if (!is.null(analysis_cache$signature) && identical(sig, analysis_cache$signature)) {
+      results <- analysis_cache$results
+      analysis_cache$message <- "Inputs unchanged. Cached analysis was reused."
+      showNotification("Inputs unchanged. Cached analysis reused.", type = "message")
+    } else {
+      results <- run_hekblue_analysis(dat$raw_data, dat$plate_map, dat$metadata, thresholds = default_qc_thresholds())
+      analysis_cache$signature <- sig
+      analysis_cache$results <- results
+      analysis_cache$inputs <- dat
+      analysis_cache$message <- "Inputs changed. Analysis was run from the current data."
+      showNotification("Analysis complete.", type = "message")
+    }
     analysis_results(results)
     active_inputs(dat)
-    showNotification("Analysis complete.", type = "message")
   })
 
   output$schema_table <- renderDT(status_datatable(schema_table, NULL, 10))
@@ -418,7 +467,8 @@ server <- function(input, output, session) {
     tagList(
       layout_columns(
         div(class = "metric-card", div(class = "metric-label", "Peptides reviewed"), div(class = "metric-value", nrow(final))),
-        div(class = "metric-card", div(class = "metric-label", "Final actions"), div(class = "small-note", paste(unique(final$final_action), collapse = ", ")))
+        div(class = "metric-card", div(class = "metric-label", "Final actions"), div(class = "small-note", paste(unique(final$final_action), collapse = ", "))),
+        div(class = "metric-card", div(class = "metric-label", "Analysis cache"), div(class = "small-note", analysis_cache$message))
       )
     )
   })
@@ -468,10 +518,12 @@ server <- function(input, output, session) {
     status_datatable(z, "status", 10)
   })
   output$design_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$design_qc, "design_status", 10) })
+  output$threshold_table <- renderDT({ status_datatable(threshold_glossary, NULL, 20) })
   output$plate_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$plate_qc, "plate_qc_status", 10) })
   output$reference_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$reference_control_qc, "status", 15) })
   output$calibration_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$interplate_calibration, "calibration_status", 10) })
   output$primary_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$primary_results, "primary_status", 20) })
+  output$sample_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$sample_qc_table, "sample_status", 20) })
   output$primary_agonist_table <- renderDT({
     req(analysis_results())
     z <- analysis_results()$primary_results
@@ -486,7 +538,7 @@ server <- function(input, output, session) {
   output$dose_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$dose_response_qc, "curve_qc_status", 20) })
   output$dose_glossary_table <- renderDT(status_datatable(dose_glossary, NULL, 10))
   output$counter_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$counter_assay_qc, "counter_qc_status", 10) })
-  output$hit_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$hit_calls, NULL, 20) })
+  output$hit_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$hit_calls, "primary_status", 20) })
   output$final_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$final_qc_table, "final_status", 20) })
 
   raw_heatmap_obj <- reactive({ req(analysis_results()); plate_heatmap_plot(analysis_results()$cleaned_well_data, "raw_od", "Raw OD by well") })

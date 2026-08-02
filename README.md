@@ -10,16 +10,20 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 - validates plate maps and experimental design
 - previews uploaded raw data, plate maps, and metadata
 - runs input EDA before interpretation
+- keeps analysis logic in reusable R modules separate from the Shiny app
+- reuses cached analysis results when the same files and metadata are submitted again in one app session
 - creates a cleaned-data review table with cleaning actions
 - separates table-heavy pages into tabs for easier review
 - scores required and optional metadata completeness separately
 - checks controls, replicates, dose series, and metadata completeness
+- exports the active QC threshold table used for every automated flag
 - calculates plate QC metrics
 - checks reference control stability
 - performs inter-plate calibration when a shared calibrator or shared positive control is present
 - normalizes agonist and antagonist responses
 - fits simple dose-response curves
 - reports detailed curve QC, including dose count, curve range, residuals, plateaus, Hill slope, and replicate noise
+- reports sample-level PASS, WARN, and FAIL calls based on explicit QC thresholds
 - provides an interactive dose-response workspace with curve plots, fit tables, QC tables, replicate noise, and QC glossary
 - flags noisy or weak curves
 - flags likely assay artifacts
@@ -77,6 +81,7 @@ AWS Batch profiles are included in `nextflow.config`.
 | Cleaned Data | inspect cleaning actions, outliers, and cleaned wells |
 | Metadata | review run documentation completeness |
 | Design QC | check controls, replicates, dose points, and calibrators |
+| QC Thresholds | inspect the active rules used to assign QC status |
 | Plate QC | review Z-prime, CV, SSMD, edge effects, and plate bias |
 | Reference & Calibration | review reference control stability and inter-plate calibration |
 | Plate Layout | inspect raw and normalized heatmaps |
@@ -91,6 +96,7 @@ AWS Batch profiles are included in `nextflow.config`.
 Each run can export:
 
 - `metadata.csv`
+- `qc_thresholds.csv`
 - `raw_data.csv`
 - `plate_map.csv`
 - `cleaned_well_data.csv`
@@ -98,6 +104,7 @@ Each run can export:
 - `design_qc.csv`
 - `plate_qc.csv`
 - `primary_results.csv`
+- `sample_qc_table.csv`
 - `dose_response_results.csv`
 - `dose_response_qc.csv`
 - `counter_assay_qc.csv`
@@ -122,6 +129,19 @@ The demo uses simulated raw plate data so the complete QC workflow can be shown 
 - [AWS and Nextflow scaling](docs/aws_nextflow_scaling.md)
 - [Public data sources](docs/public_data_sources.md)
 - [Implementation plan](docs/implementation_plan.md)
+
+## Analysis And App Separation
+
+The analysis engine lives in `R/analysis.R`, `R/qc_metrics.R`, `R/qc_thresholds.R`, `R/plots.R`, and `R/export.R`.
+
+The Shiny app in `app.R` is a front end over those modules. It reads the input files, computes a run signature from the raw data, plate map, and metadata, and reuses the cached result object when the inputs have not changed. UI-only changes do not require rethinking the analysis code.
+
+The same analysis engine is used by:
+
+- the local Shiny app
+- `scripts/run_pipeline_cli.R`
+- the Nextflow workflow in `main.nf`
+- the AWS Batch-ready Nextflow profile in `nextflow.config`
 
 ## Key Sources
 
