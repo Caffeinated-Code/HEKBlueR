@@ -40,6 +40,54 @@ plate_heatmap_plot <- function(df, value_col = "raw_od", title = "Plate heatmap"
     )
 }
 
+plate_heatmap_plotly <- function(df, value_col = "raw_od", title = "Plate heatmap") {
+  if (!requireNamespace("plotly", quietly = TRUE)) stop("plotly is required for interactive plate heatmaps")
+  rows <- LETTERS[1:8]
+  cols <- 1:12
+  plates <- unique(df$plate_id)
+  plots <- lapply(plates, function(pid) {
+    plate <- df[df$plate_id == pid, , drop = FALSE]
+    z <- matrix(NA_real_, nrow = length(rows), ncol = length(cols), dimnames = list(rows, cols))
+    text <- matrix("", nrow = length(rows), ncol = length(cols), dimnames = list(rows, cols))
+    for (i in seq_len(nrow(plate))) {
+      r <- as.character(plate$row[i])
+      c <- as.integer(plate$col[i])
+      if (!r %in% rows || is.na(c) || !c %in% cols) next
+      val <- plate[[value_col]][i]
+      z[r, as.character(c)] <- val
+      text[r, as.character(c)] <- paste0(
+        "Plate: ", plate$plate_id[i],
+        "<br>Well: ", plate$well[i],
+        "<br>Sample: ", plate$sample_id[i],
+        "<br>Peptide/compound: ", plate$peptide_id[i],
+        "<br>Control type: ", plate$control_type[i],
+        "<br>Assay mode: ", plate$assay_mode[i],
+        "<br>Concentration uM: ", plate$concentration_uM[i],
+        "<br>", value_col, ": ", round(val, 2)
+      )
+    }
+    y_order <- rows
+    plotly::plot_ly(
+      x = cols,
+      y = y_order,
+      z = z[y_order, , drop = FALSE],
+      text = text[y_order, , drop = FALSE],
+      type = "heatmap",
+      colors = c("#440154", "#31688e", "#35b779", "#fde725"),
+      hoverinfo = "text",
+      colorbar = list(title = value_col, len = 0.7)
+    ) |>
+      plotly::layout(
+        title = list(text = pid, font = list(size = 15)),
+        xaxis = list(title = "Column", tickmode = "array", tickvals = cols, ticktext = sprintf("%02d", cols), side = "bottom", tickfont = list(size = 13), titlefont = list(size = 14)),
+        yaxis = list(title = "Row", tickmode = "array", tickvals = y_order, ticktext = y_order, tickfont = list(size = 13), titlefont = list(size = 14), autorange = "reversed"),
+        margin = list(l = 70, r = 40, t = 55, b = 55)
+      )
+  })
+  plotly::subplot(plots, nrows = length(plots), shareX = FALSE, shareY = FALSE, titleX = TRUE, titleY = TRUE, margin = 0.04) |>
+    plotly::layout(title = list(text = title, font = list(size = 18)), showlegend = FALSE)
+}
+
 control_boxplot <- function(df) {
   controls <- df[df$control_type != "test_sample" & df$control_type != "empty", ]
   ggplot2::ggplot(controls, ggplot2::aes(x = control_type, y = blank_corrected_od, fill = control_type)) +

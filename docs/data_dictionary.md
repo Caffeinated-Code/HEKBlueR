@@ -16,6 +16,7 @@
 | `technical_replicate` | technical replicate number |
 | `biological_replicate` | biological replicate number |
 | `raw_od` | raw optical density |
+| `expected_activity` | expected compound role, such as agonist, antagonist, or unknown |
 
 ## Control Types
 
@@ -44,3 +45,25 @@ Metadata uses three columns:
 
 This format is easy to parse into JSON, CSV, SQLite, DuckDB, or Postgres.
 
+## Assay Manifest
+
+| Column | Meaning |
+|---|---|
+| `assay_identifier` | deterministic run ID based on raw data, plate map, metadata, and QC thresholds |
+| `input_signature` | combined hash for all inputs and thresholds |
+| `raw_data_signature` | hash for raw well-level data |
+| `plate_map_signature` | hash for plate map or well annotations |
+| `metadata_signature` | hash for submitted metadata |
+| `threshold_signature` | hash for selected QC thresholds |
+
+## Run Documentation
+
+`run_documentation.csv` combines:
+
+- assay identifier
+- computed input signatures
+- submitted metadata
+- selected QC thresholds
+- analysis parameters
+
+This file is intended for audit trails and later database loading.

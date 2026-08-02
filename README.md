@@ -7,9 +7,10 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 ## What It Does
 
 - imports raw HEK-Blue plate-reader data
+- lets users choose demo modules: primary agonist, secondary antagonist, counter-assay, or any combination
 - validates plate maps and experimental design
 - previews uploaded raw data, plate maps, and metadata
-- runs input EDA before interpretation
+- runs input EDA with raw data and metadata summaries before interpretation
 - keeps analysis logic in reusable R modules separate from the Shiny app
 - reuses cached analysis results when the same files and metadata are submitted again in one app session
 - creates a cleaned-data review table with cleaning actions
@@ -99,7 +100,10 @@ Each run can export:
 
 - `metadata.csv`
 - `assay_manifest.csv`
+- `run_documentation.csv`
 - `qc_thresholds.csv`
+- `raw_data_summary.csv`
+- `metadata_summary.csv`
 - `raw_data.csv`
 - `plate_map.csv`
 - `cleaned_well_data.csv`
@@ -127,6 +131,7 @@ The demo uses simulated raw plate data so the complete QC workflow can be shown 
 
 - [Assay primer](docs/assay_primer.md)
 - [User manual](docs/user_manual.md)
+- [Analysis walkthrough](docs/analysis_walkthrough.md)
 - [QC metrics](docs/qc_metrics.md)
 - [QC threshold rationale](docs/qc_threshold_rationale.md)
 - [Data dictionary](docs/data_dictionary.md)

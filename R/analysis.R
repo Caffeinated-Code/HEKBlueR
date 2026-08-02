@@ -42,6 +42,63 @@ assay_manifest <- function(raw_data, plate_map, metadata, thresholds = default_q
   )
 }
 
+run_documentation_table <- function(manifest, metadata, thresholds = default_qc_thresholds()) {
+  threshold_rows <- qc_threshold_table(thresholds)
+  threshold_doc <- data.frame(
+    assay_identifier = manifest$assay_identifier[1],
+    section = "qc_threshold",
+    parameter = threshold_rows$metric,
+    value = threshold_rows$threshold,
+    source = threshold_rows$qc_layer,
+    notes = threshold_rows$interpretation,
+    stringsAsFactors = FALSE
+  )
+  metadata_doc <- data.frame(
+    assay_identifier = manifest$assay_identifier[1],
+    section = "metadata",
+    parameter = metadata$field,
+    value = as.character(metadata$value),
+    source = ifelse(metadata$required %in% c(TRUE, "TRUE", "true", "1"), "required", "optional"),
+    notes = "",
+    stringsAsFactors = FALSE
+  )
+  manifest_doc <- data.frame(
+    assay_identifier = manifest$assay_identifier[1],
+    section = "assay_manifest",
+    parameter = names(manifest),
+    value = as.character(unlist(manifest[1, ], use.names = FALSE)),
+    source = "computed",
+    notes = c(
+      "Unique deterministic run identifier.",
+      "Combined signature of raw data, plate map, metadata, and thresholds.",
+      "Raw data signature.",
+      "Plate map signature.",
+      "Metadata signature.",
+      "QC threshold signature.",
+      "Project metadata.",
+      "Target metadata.",
+      "Run timestamp."
+    )[seq_along(names(manifest))],
+    stringsAsFactors = FALSE
+  )
+  config_doc <- data.frame(
+    assay_identifier = manifest$assay_identifier[1],
+    section = "analysis_parameter",
+    parameter = c("assay_type", "normalization", "curve_model", "table_precision_export", "table_precision_app"),
+    value = c("HEK-Blue SEAP reporter", "blank correction plus control scaling", "four-parameter logistic with base R nls", "4 decimal places for analysis exports", "2 decimal places where decimals are useful"),
+    source = "HEKBlueR",
+    notes = c(
+      "Reporter assay readout.",
+      "Applied before percent activation and inhibition.",
+      "Used for dose-response summaries when enough dose points are available.",
+      "Keeps downstream analysis and database loads precise.",
+      "Keeps visual review readable."
+    ),
+    stringsAsFactors = FALSE
+  )
+  rbind(manifest_doc, metadata_doc, threshold_doc, config_doc)
+}
+
 fill_target_id <- function(df, metadata) {
   metadata_target <- if (all(c("field", "value") %in% names(metadata))) {
     metadata$value[match("target_id", metadata$field)]
@@ -111,6 +168,77 @@ input_eda <- function(raw_data, plate_map) {
       "Missing raw OD values cannot be interpreted without review.",
       "Very high OD values may exceed the useful reader range.",
       "Control labels found in the uploaded file."
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+raw_data_summary <- function(raw_data) {
+  assay_modes <- if ("assay_mode" %in% names(raw_data)) paste(sort(unique(raw_data$assay_mode)), collapse = ";") else ""
+  data.frame(
+    metric = c(
+      "rows",
+      "plates",
+      "assay_modes",
+      "test_samples",
+      "control_types",
+      "concentration_points",
+      "technical_replicate_values",
+      "biological_replicate_values",
+      "raw_od_min",
+      "raw_od_median",
+      "raw_od_max"
+    ),
+    value = c(
+      nrow(raw_data),
+      if ("plate_id" %in% names(raw_data)) length(unique(raw_data$plate_id)) else NA_integer_,
+      assay_modes,
+      if ("peptide_id" %in% names(raw_data)) length(unique(raw_data$peptide_id[!is.na(raw_data$peptide_id) & raw_data$peptide_id != ""])) else NA_integer_,
+      if ("control_type" %in% names(raw_data)) length(unique(raw_data$control_type)) else NA_integer_,
+      if ("concentration_uM" %in% names(raw_data)) length(unique(raw_data$concentration_uM[!is.na(raw_data$concentration_uM)])) else NA_integer_,
+      if ("technical_replicate" %in% names(raw_data)) paste(sort(unique(raw_data$technical_replicate[!is.na(raw_data$technical_replicate)])), collapse = ";") else "",
+      if ("biological_replicate" %in% names(raw_data)) paste(sort(unique(raw_data$biological_replicate[!is.na(raw_data$biological_replicate)])), collapse = ";") else "",
+      if ("raw_od" %in% names(raw_data)) round(min(raw_data$raw_od, na.rm = TRUE), 4) else NA_real_,
+      if ("raw_od" %in% names(raw_data)) round(safe_median(raw_data$raw_od), 4) else NA_real_,
+      if ("raw_od" %in% names(raw_data)) round(max(raw_data$raw_od, na.rm = TRUE), 4) else NA_real_
+    ),
+    interpretation = c(
+      "Total uploaded well-level records.",
+      "Number of unique plates in the upload.",
+      "Assay modules detected in the upload.",
+      "Number of unique tested peptide or compound IDs.",
+      "Number of well roles detected.",
+      "Number of non-missing dose levels.",
+      "Technical replicate labels detected.",
+      "Biological replicate labels detected.",
+      "Lowest raw optical density.",
+      "Median raw optical density.",
+      "Highest raw optical density."
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+metadata_summary <- function(metadata) {
+  required <- metadata[metadata$required %in% c(TRUE, "TRUE", "true", "1"), , drop = FALSE]
+  optional <- metadata[!(metadata$required %in% c(TRUE, "TRUE", "true", "1")), , drop = FALSE]
+  data.frame(
+    metric = c("metadata_fields", "required_fields", "optional_fields", "blank_values", "required_blank_values", "key_fields_present"),
+    value = c(
+      nrow(metadata),
+      nrow(required),
+      nrow(optional),
+      sum(is.na(metadata$value) | metadata$value == ""),
+      sum(is.na(required$value) | required$value == ""),
+      paste(intersect(c("scientist", "project", "assay_date", "target_id", "cell_line", "protocol_version"), metadata$field[!is.na(metadata$value) & metadata$value != ""]), collapse = ";")
+    ),
+    interpretation = c(
+      "Total metadata rows supplied.",
+      "Fields treated as required for reproducibility.",
+      "Fields useful for audit, troubleshooting, and search.",
+      "Metadata rows without values.",
+      "Required metadata rows without values.",
+      "High-value documentation fields found."
     ),
     stringsAsFactors = FALSE
   )
@@ -707,8 +835,11 @@ run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NUL
   results <- list(
     qc_thresholds = qc_threshold_table(thresholds),
     assay_manifest = manifest,
+    run_documentation = run_documentation_table(manifest, metadata, thresholds),
     metadata_completeness = metadata_completeness(metadata, thresholds),
     input_eda = eda,
+    raw_data_summary = raw_data_summary(raw_data),
+    metadata_summary = metadata_summary(metadata),
     cleaned_well_data = cleaned,
     interplate_calibration = calibration$factors,
     reference_control_qc = ref_qc,

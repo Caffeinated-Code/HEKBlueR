@@ -13,7 +13,7 @@ source("R/analysis.R")
 source("R/plots.R")
 source("R/simulate_data.R")
 
-APP_VERSION <- "0.5.0"
+APP_VERSION <- "0.6.0"
 
 metric_help <- list(
   "Z-prime" = "Z-prime measures separation between positive and negative controls. Values above 0.5 are preferred. Values from 0.3 to 0.5 need review. Lower values usually mean the assay window is weak.",
@@ -64,13 +64,14 @@ clean_name <- function(x) {
 status_datatable <- function(df, status_col = NULL, page_length = 15) {
   if (is.null(df) || !nrow(df)) return(datatable(data.frame(Message = "No rows available.")))
   numeric_cols <- names(df)[vapply(df, is.numeric, logical(1))]
+  decimal_cols <- numeric_cols[!vapply(df[numeric_cols], function(x) all(is.na(x) | abs(x - round(x)) < 1e-9), logical(1))]
   dt <- datatable(
     df,
     filter = "top",
     rownames = FALSE,
     options = list(pageLength = page_length, scrollX = TRUE, scrollY = "48vh", scrollCollapse = TRUE)
   )
-  if (length(numeric_cols)) dt <- formatRound(dt, numeric_cols, digits = 2)
+  if (length(decimal_cols)) dt <- formatRound(dt, decimal_cols, digits = 2)
   if (!is.null(status_col) && status_col %in% names(df)) {
     dt <- formatStyle(
       dt,
@@ -303,6 +304,13 @@ ui <- page_navbar(
           tags$li("Inspect QC, plots, and final decisions."),
           tags$li("Export database-ready results.")
         ),
+        checkboxGroupInput(
+          "demo_modes",
+          "Demo assay modules",
+          choices = c("Primary agonist" = "agonist", "Secondary antagonist" = "antagonist", "Counter-assay" = "counter"),
+          selected = c("agonist", "antagonist", "counter"),
+          inline = TRUE
+        ),
         actionButton("load_demo", "Load demo data", class = "btn-primary"),
         span(" "),
         actionButton("run_analysis", "Run analysis", class = "btn-success")
@@ -441,10 +449,18 @@ ui <- page_navbar(
   ),
   nav_panel(
     "EDA",
-    layout_columns(
-      col_widths = c(4, 8),
-      card(card_header("Input EDA checks"), DTOutput("eda_table")),
-      card(class = "plot-card", card_header("Raw OD distribution"), plotlyOutput("raw_distribution", height = "500px"), div(class = "download-row", downloadButton("download_raw_distribution", "Download raw OD plot")))
+    div(class = "section-note", "EDA is the first sanity check. It summarizes what was uploaded before any biology is interpreted."),
+    tabsetPanel(
+      tabPanel(
+        "Summary",
+        layout_columns(
+          col_widths = c(6, 6),
+          card(card_header("Raw data summary"), DTOutput("raw_data_summary_table")),
+          card(card_header("Metadata summary"), DTOutput("metadata_summary_table"))
+        )
+      ),
+      tabPanel("Input checks", card(card_header("Input EDA checks"), DTOutput("eda_table"))),
+      tabPanel("Raw OD distribution", card(class = "plot-card", card_header("Raw OD distribution"), plotlyOutput("raw_distribution", height = "500px"), div(class = "download-row", downloadButton("download_raw_distribution", "Download raw OD plot"))))
     )
   ),
   nav_panel(
@@ -501,7 +517,10 @@ ui <- page_navbar(
       tabPanel("Antagonist", card(card_header("Antagonist results"), DTOutput("primary_antagonist_table"))),
       tabPanel("Sample QC", card(card_header("Sample-level QC summary"), DTOutput("sample_qc_table"))),
       tabPanel("Waterfall", card(class = "plot-card plot-tall", card_header("Interactive waterfall plot"), plotlyOutput("waterfall", height = "700px"), div(class = "download-row", downloadButton("download_waterfall", "Download waterfall plot")))),
-      tabPanel("Replicate noise", card(class = "plot-card plot-wide", card_header("Replicate CV by dose"), plotlyOutput("primary_replicate_cv_plot", height = "540px"), div(class = "download-row", downloadButton("download_replicate_cv_plot_primary", "Download replicate CV plot"))))
+      tabPanel("Replicate noise",
+        div(class = "section-note", "Replicate CV shows how much technical replicate wells disagree at each dose. Lower values mean the dose summary is more stable. High values mean a hit call may reflect pipetting, edge effects, cell variability, or readout noise instead of biology."),
+        card(class = "plot-card plot-wide", card_header("Replicate CV by dose"), plotlyOutput("primary_replicate_cv_plot", height = "540px"), div(class = "download-row", downloadButton("download_replicate_cv_plot_primary", "Download replicate CV plot")))
+      )
     )
   ),
   nav_panel(
@@ -511,7 +530,10 @@ ui <- page_navbar(
       tabPanel("Interactive curves", card(class = "plot-card plot-tall", card_header(tagList("Dose-response plot ", metric_link("EC50 or IC50"), " | ", metric_link("Hill slope"))), plotlyOutput("dose_plot", height = "700px"), div(class = "download-row", downloadButton("download_dose_plot", "Download dose-response plot")))),
       tabPanel("Curve fit table", card(card_header(tagList("Dose-response results ", metric_link("Dynamic range"), " | ", metric_link("RMSE"))), DTOutput("dose_table"))),
       tabPanel("Curve QC table", card(card_header(tagList("Detailed curve QC ", metric_link("Plateau checks"), " | ", metric_link("Monotonicity"))), DTOutput("dose_qc_table"))),
-      tabPanel("Replicate noise", card(class = "plot-card plot-wide", card_header(tagList("Replicate noise by dose ", metric_link("Replicate CV"))), plotlyOutput("replicate_cv_plot", height = "540px"), div(class = "download-row", downloadButton("download_replicate_cv_plot", "Download replicate CV plot")))),
+      tabPanel("Replicate noise",
+        div(class = "section-note", "Use this plot before trusting EC50 or IC50. A smooth curve with high replicate CV at key doses is less reliable than a curve with consistent replicate wells. Review points above the warning line before advancing a compound."),
+        card(class = "plot-card plot-wide", card_header(tagList("Replicate noise by dose ", metric_link("Replicate CV"))), plotlyOutput("replicate_cv_plot", height = "540px"), div(class = "download-row", downloadButton("download_replicate_cv_plot", "Download replicate CV plot")))
+      ),
       tabPanel("QC glossary", card(card_header("Dose-response QC explanations"), DTOutput("dose_glossary_table")))
     )
   ),
@@ -538,6 +560,7 @@ ui <- page_navbar(
   nav_panel(
     "Final QC",
     card(card_header("Assay manifest"), DTOutput("assay_manifest_table")),
+    card(card_header("Run documentation"), DTOutput("run_documentation_table")),
     card(card_header("Final QC table"), DTOutput("final_qc_table")),
     card(card_header("Export"), div(class = "download-row", downloadButton("download_final_qc", "Final QC CSV"), downloadButton("download_normalized", "Normalized results CSV"), downloadButton("download_package", "Run package ZIP")))
   )
@@ -586,6 +609,12 @@ server <- function(input, output, session) {
       read.csv("data/simulated/run_metadata.csv", stringsAsFactors = FALSE)
     } else {
       metadata_from_form()
+    }
+    if (demo_loaded() && is.null(input$raw_file)) {
+      selected_modes <- input$demo_modes %||% c("agonist", "antagonist", "counter")
+      validate(need(length(selected_modes) > 0, "Choose at least one demo assay module."))
+      raw_data <- raw_data[raw_data$assay_mode %in% selected_modes, , drop = FALSE]
+      plate_map <- plate_map[plate_map$assay_mode %in% selected_modes, , drop = FALSE]
     }
     list(raw_data = raw_data, plate_map = plate_map, metadata = metadata)
   })
@@ -692,6 +721,8 @@ server <- function(input, output, session) {
     status_datatable(md[!(md$required %in% c(TRUE, "TRUE", "true", "1")), , drop = FALSE], NULL, 15)
   })
   output$eda_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$input_eda, "status", 10) })
+  output$raw_data_summary_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$raw_data_summary, NULL, 15) })
+  output$metadata_summary_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$metadata_summary, NULL, 15) })
   output$cleaned_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$cleaned_well_data, NULL, 20) })
   output$cleaning_summary <- renderDT({
     req(analysis_results())
@@ -725,10 +756,13 @@ server <- function(input, output, session) {
   output$counter_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$counter_assay_qc, "counter_qc_status", 10) })
   output$hit_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$hit_calls, "primary_status", 20) })
   output$assay_manifest_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$assay_manifest, NULL, 5) })
+  output$run_documentation_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$run_documentation, NULL, 20) })
   output$final_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$final_qc_table, "final_status", 20) })
 
   raw_heatmap_obj <- reactive({ req(analysis_results()); plate_heatmap_plot(analysis_results()$cleaned_well_data, "raw_od", "Raw OD by well") })
   norm_heatmap_obj <- reactive({ req(analysis_results()); plate_heatmap_plot(analysis_results()$normalized_results, "percent_activation", "Percent activation by well") })
+  raw_heatmap_interactive_obj <- reactive({ req(analysis_results()); plate_heatmap_plotly(analysis_results()$cleaned_well_data, "raw_od", "Raw OD by well") })
+  norm_heatmap_interactive_obj <- reactive({ req(analysis_results()); plate_heatmap_plotly(analysis_results()$normalized_results, "percent_activation", "Percent activation by well") })
   qc_plot_obj <- reactive({ req(analysis_results()); qc_bar_plot(analysis_results()$plate_qc) })
   raw_distribution_obj <- reactive({ req(analysis_results()); raw_distribution_plot(analysis_results()$cleaned_well_data) })
   waterfall_obj <- reactive({ req(analysis_results()); waterfall_plot(analysis_results()$primary_results) })
@@ -738,8 +772,8 @@ server <- function(input, output, session) {
   replicate_cv_obj <- reactive({ req(analysis_results()); replicate_cv_plot(analysis_results()$primary_results) })
   calibration_plot_obj <- reactive({ req(analysis_results()); calibration_plot(analysis_results()$interplate_calibration) })
 
-  output$raw_heatmap <- renderPlotly(plotly::layout(ggplotly(raw_heatmap_obj(), tooltip = "text"), margin = list(l = 80, r = 100, t = 70, b = 70)))
-  output$normalized_heatmap <- renderPlotly(plotly::layout(ggplotly(norm_heatmap_obj(), tooltip = "text"), margin = list(l = 80, r = 100, t = 70, b = 70)))
+  output$raw_heatmap <- renderPlotly(raw_heatmap_interactive_obj())
+  output$normalized_heatmap <- renderPlotly(norm_heatmap_interactive_obj())
   output$qc_plot <- renderPlotly(plotly::layout(ggplotly(qc_plot_obj()), margin = list(l = 120, r = 30, t = 60, b = 50)))
   output$raw_distribution <- renderPlotly(ggplotly(raw_distribution_obj()))
   output$waterfall <- renderPlotly(plotly::layout(ggplotly(waterfall_obj()), margin = list(l = 180, r = 30, t = 60, b = 60)))

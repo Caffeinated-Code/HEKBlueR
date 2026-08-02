@@ -4,6 +4,14 @@
 
 Open the app and click **Load demo data**. Click **Run analysis**.
 
+Use **Demo assay modules** to choose which simulated data to load:
+
+- primary agonist
+- secondary antagonist
+- counter-assay
+
+This lets you test partial workflows, such as primary-only review or counter-assay-only review.
+
 For your own experiment, upload:
 
 - raw plate-reader CSV
@@ -30,6 +38,8 @@ After upload, open **Uploaded Preview** to confirm that HEKBlueR parsed the file
 Open **QC Thresholds** before running analysis if the assay needs thresholds different from the defaults. Each editable threshold shows a recommended range. The selected thresholds are saved with the run and affect the assay identifier.
 
 Open **EDA** before interpreting results. This page checks plate count, well count, missing columns, duplicate wells, missing OD values, saturated OD values, and detected control types.
+
+Use **EDA > Summary** first. It explains how many plates, assay modes, compounds, dose points, control types, and metadata fields were found.
 
 Open **Cleaned Data** to review blank correction, missing wells, saturated wells, negative corrected values, robust outlier flags, and cleaning actions.
 
@@ -97,6 +107,8 @@ Antagonist mode reports inhibition.
 
 Open the **Sample QC** subtab for one row per target, peptide, and assay mode. This table reports PASS, WARN, and FAIL calls based on primary replicate noise, dose-response QC, and counter-assay artifacts.
 
+The **Replicate noise** subtab shows technical replicate CV at each dose. Low CV means replicate wells agree. High CV means the dose summary may be unstable. If high CV appears near the active part of the curve, review the plate layout, edge effects, pipetting, and cell handling before trusting the hit.
+
 ## 7. Review Secondary Curves
 
 Secondary Curves shows EC50 or IC50 estimates and curve flags.
@@ -133,6 +145,7 @@ Counter-Assays shows whether a hit may be caused by:
 Use Final QC to export:
 
 - assay manifest
+- run documentation
 - final QC table
 - normalized results
 - full run package

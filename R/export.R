@@ -12,6 +12,8 @@ export_hekblue_results <- function(results, raw_data, plate_map, metadata, outpu
   if (requireNamespace("jsonlite", quietly = TRUE)) {
     jsonlite::write_json(
       list(
+        assay_manifest = results$assay_manifest,
+        run_documentation = results$run_documentation,
         metadata = metadata,
         final_qc_table = results$final_qc_table,
         plate_qc = results$plate_qc
