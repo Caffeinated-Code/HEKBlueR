@@ -24,6 +24,7 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 - fits simple dose-response curves
 - reports detailed curve QC, including dose count, curve range, residuals, plateaus, Hill slope, and replicate noise
 - reports sample-level PASS, WARN, and FAIL calls based on explicit QC thresholds
+- assigns a deterministic assay identifier from raw data, plate map, metadata, and QC thresholds
 - provides an interactive dose-response workspace with curve plots, fit tables, QC tables, replicate noise, and QC glossary
 - flags noisy or weak curves
 - flags likely assay artifacts
@@ -76,6 +77,7 @@ AWS Batch profiles are included in `nextflow.config`.
 |---|---|
 | Demo | load demo data and run analysis |
 | Upload | upload raw data, plate map, and metadata |
+| QC Thresholds | adjust review thresholds before running analysis |
 | Uploaded Preview | inspect uploaded raw data, plate map, and metadata |
 | EDA | review input-level exploratory checks |
 | Cleaned Data | inspect cleaning actions, outliers, and cleaned wells |
@@ -96,6 +98,7 @@ AWS Batch profiles are included in `nextflow.config`.
 Each run can export:
 
 - `metadata.csv`
+- `assay_manifest.csv`
 - `qc_thresholds.csv`
 - `raw_data.csv`
 - `plate_map.csv`
@@ -125,6 +128,7 @@ The demo uses simulated raw plate data so the complete QC workflow can be shown 
 - [Assay primer](docs/assay_primer.md)
 - [User manual](docs/user_manual.md)
 - [QC metrics](docs/qc_metrics.md)
+- [QC threshold rationale](docs/qc_threshold_rationale.md)
 - [Data dictionary](docs/data_dictionary.md)
 - [AWS and Nextflow scaling](docs/aws_nextflow_scaling.md)
 - [Public data sources](docs/public_data_sources.md)

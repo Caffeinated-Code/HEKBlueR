@@ -6,11 +6,40 @@ enrich_raw_with_plate_map <- function(raw_data, plate_map) {
   join_cols <- intersect(c("plate_id", "well"), intersect(names(raw_data), names(plate_map)))
   if (!all(c("plate_id", "well") %in% join_cols)) return(raw_data)
   extra_cols <- setdiff(
-    intersect(c("target_id", "biological_replicate", "technical_replicate"), names(plate_map)),
+    intersect(c("target_id", "biological_replicate", "technical_replicate", "expected_activity", "compound_role", "cpd_role"), names(plate_map)),
     names(raw_data)
   )
   if (!length(extra_cols)) return(raw_data)
   merge(raw_data, plate_map[c(join_cols, extra_cols)], by = join_cols, all.x = TRUE, sort = FALSE)
+}
+
+object_md5 <- function(x) {
+  tmp <- tempfile(fileext = ".rds")
+  saveRDS(x, tmp, version = 2)
+  on.exit(unlink(tmp), add = TRUE)
+  unname(tools::md5sum(tmp))
+}
+
+assay_manifest <- function(raw_data, plate_map, metadata, thresholds = default_qc_thresholds()) {
+  raw_sig <- object_md5(raw_data)
+  plate_sig <- object_md5(plate_map)
+  meta_sig <- object_md5(metadata)
+  threshold_sig <- object_md5(thresholds)
+  combined <- object_md5(list(raw = raw_sig, plate_map = plate_sig, metadata = meta_sig, thresholds = threshold_sig))
+  project <- if (all(c("field", "value") %in% names(metadata))) metadata$value[match("project", metadata$field)] else NA_character_
+  target <- if (all(c("field", "value") %in% names(metadata))) metadata$value[match("target_id", metadata$field)] else NA_character_
+  data.frame(
+    assay_identifier = paste0("HEKBLUER-", toupper(substr(combined, 1, 12))),
+    input_signature = combined,
+    raw_data_signature = raw_sig,
+    plate_map_signature = plate_sig,
+    metadata_signature = meta_sig,
+    threshold_signature = threshold_sig,
+    project = ifelse(is.na(project), "", project),
+    target_id = ifelse(is.na(target), "", target),
+    created_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"),
+    stringsAsFactors = FALSE
+  )
 }
 
 fill_target_id <- function(df, metadata) {
@@ -255,6 +284,49 @@ calculate_plate_qc <- function(cleaned, thresholds = default_qc_thresholds()) {
   do.call(rbind, out)
 }
 
+intraplate_variability_qc <- function(cleaned, thresholds = default_qc_thresholds()) {
+  plates <- split(cleaned, cleaned$plate_id)
+  out <- lapply(names(plates), function(pid) {
+    x <- plates[[pid]]
+    control <- x[x$control_type != "test_sample" & x$control_type != "empty", ]
+    control_cv <- cv_percent(control$blank_corrected_od)
+    edge <- edge_effect_score(x)
+    row_bias <- row_bias_score(x)
+    col_bias <- col_bias_score(x)
+    outlier_rate <- 100 * mean(x$outlier_flag | x$saturated_flag | x$negative_corrected_flag | x$missing_flag, na.rm = TRUE)
+    status <- "PASS"
+    notes <- character()
+    if (!is.na(control_cv) && control_cv > thresholds$plate$intraplate_cv_warn_percent) {
+      status <- "WARN"
+      notes <- c(notes, "within-plate control CV is high")
+    }
+    if (any(c(edge, row_bias, col_bias) > thresholds$plate$spatial_bias_warn, na.rm = TRUE)) {
+      status <- "WARN"
+      notes <- c(notes, "spatial bias exceeds threshold")
+    }
+    if (!is.na(outlier_rate) && outlier_rate > thresholds$plate$outlier_rate_warn_percent) {
+      status <- "WARN"
+      notes <- c(notes, "flagged-well rate exceeds threshold")
+    }
+    data.frame(
+      plate_id = pid,
+      assay_mode = unique(x$assay_mode)[1],
+      intraplate_status = status,
+      control_cv_percent = round(control_cv, 4),
+      edge_effect = round(edge, 4),
+      row_bias = round(row_bias, 4),
+      column_bias = round(col_bias, 4),
+      flagged_well_rate_percent = round(outlier_rate, 4),
+      intraplate_cv_warn_threshold = thresholds$plate$intraplate_cv_warn_percent,
+      spatial_bias_warn_threshold = thresholds$plate$spatial_bias_warn,
+      outlier_rate_warn_threshold = thresholds$plate$outlier_rate_warn_percent,
+      notes = paste(notes, collapse = "; "),
+      stringsAsFactors = FALSE
+    )
+  })
+  do.call(rbind, out)
+}
+
 reference_control_qc <- function(cleaned, thresholds = default_qc_thresholds()) {
   control_types <- c("negative_control", "positive_control", "agonist_challenge_control", "known_antagonist_control", "inter_plate_calibrator")
   x <- cleaned[cleaned$control_type %in% control_types, ]
@@ -320,7 +392,11 @@ summarize_primary <- function(normalized, thresholds = default_qc_thresholds()) 
   test <- normalized[normalized$control_type == "test_sample", ]
   if (!nrow(test)) return(data.frame())
   if (!"target_id" %in% names(test)) test$target_id <- NA_character_
-  keys <- unique(test[c("plate_id", "assay_mode", "target_id", "peptide_id", "concentration_uM")])
+  if (!"expected_activity" %in% names(test)) {
+    test$expected_activity <- ifelse("compound_role" %in% names(test), test$compound_role, ifelse("cpd_role" %in% names(test), test$cpd_role, "unknown"))
+  }
+  test$expected_activity[is.na(test$expected_activity) | test$expected_activity == ""] <- "unknown"
+  keys <- unique(test[c("plate_id", "assay_mode", "target_id", "peptide_id", "expected_activity", "concentration_uM")])
   result <- do.call(rbind, lapply(seq_len(nrow(keys)), function(i) {
     key <- keys[i, ]
     x <- test[
@@ -328,6 +404,7 @@ summarize_primary <- function(normalized, thresholds = default_qc_thresholds()) 
         test$assay_mode == key$assay_mode &
         test$target_id == key$target_id &
         test$peptide_id == key$peptide_id &
+        test$expected_activity == key$expected_activity &
         test$concentration_uM == key$concentration_uM,
     ]
     data.frame(
@@ -352,6 +429,27 @@ summarize_primary <- function(normalized, thresholds = default_qc_thresholds()) 
     "AGONIST_HIT",
     ifelse(assay_mode == "antagonist" & inhibition_mean >= thresholds$primary$antagonist_hit_percent & inhibition_cv <= thresholds$primary$replicate_cv_warn_percent, "ANTAGONIST_HIT", "NO_HIT")
   ))
+  result$observed_direction <- with(result, ifelse(
+    activation_mean >= thresholds$primary$agonist_hit_percent & inhibition_mean < thresholds$primary$antagonist_hit_percent,
+    "agonist_like",
+    ifelse(inhibition_mean >= thresholds$primary$antagonist_hit_percent & activation_mean < thresholds$primary$agonist_hit_percent,
+      "antagonist_like",
+      ifelse(activation_mean >= thresholds$primary$agonist_hit_percent & inhibition_mean >= thresholds$primary$antagonist_hit_percent, "mixed", "no_clear_effect")
+    )
+  ))
+  expected <- tolower(result$expected_activity)
+  result$direction_status <- ifelse(
+    expected %in% c("unknown", "na", ""),
+    "WARN",
+    ifelse((expected %in% c("agonist", "agonist_like") & result$observed_direction == "agonist_like") |
+      (expected %in% c("antagonist", "antagonist_like") & result$observed_direction == "antagonist_like"),
+    "PASS", "WARN")
+  )
+  result$direction_note <- ifelse(
+    result$direction_status == "PASS",
+    "Observed response matches expected compound role.",
+    ifelse(expected %in% c("unknown", "na", ""), "Expected compound role is unknown.", "Observed response does not match expected compound role.")
+  )
   result$primary_status <- ifelse(
     interpretable_cv & active_cv > thresholds$primary$replicate_cv_fail_percent,
     "FAIL",
@@ -531,6 +629,28 @@ sample_qc_summary <- function(primary, dose_qc, counter_qc) {
 }
 
 make_final_qc <- function(design_qc, plate_qc, dose_qc, counter_qc, primary) {
+  if (!nrow(primary)) {
+    base <- data.frame(
+      design_overall = ifelse(nrow(design_qc) && any(design_qc$design_status == "FAIL"), "FAIL", ifelse(nrow(design_qc) && any(design_qc$design_status == "WARN"), "WARN", "PASS")),
+      plate_overall = ifelse(nrow(plate_qc) && any(plate_qc$plate_qc_status == "FAIL"), "FAIL", ifelse(nrow(plate_qc) && any(plate_qc$plate_qc_status == "WARN"), "WARN", "PASS")),
+      stringsAsFactors = FALSE
+    )
+    if (nrow(counter_qc)) {
+      out <- data.frame(
+        final_status = ifelse(counter_qc$counter_qc_status == "PASS", "PASS", "WARN"),
+        target_id = counter_qc$target_id,
+        peptide_id = counter_qc$peptide_id,
+        hit_call = "NO_PRIMARY_DATA",
+        curve_qc = "NOT_RUN",
+        counter_assay_qc = counter_qc$counter_qc_status,
+        artifact_flags = counter_qc$artifact_flags,
+        final_action = ifelse(counter_qc$artifact_flags == "NONE", "COUNTER_ONLY_REVIEW", "COUNTER_ONLY_ARTIFACT_REVIEW"),
+        stringsAsFactors = FALSE
+      )
+      return(cbind(base[rep(1, nrow(out)), ], out))
+    }
+    return(cbind(base, data.frame(final_status = "WARN", target_id = NA_character_, peptide_id = NA_character_, hit_call = "NO_PRIMARY_DATA", curve_qc = "NOT_RUN", counter_assay_qc = "NOT_RUN", artifact_flags = "NOT_TESTED", final_action = "PARTIAL_DATA_REVIEW", stringsAsFactors = FALSE)))
+  }
   peptides <- unique(primary[c("target_id", "peptide_id")])
   out <- lapply(seq_len(nrow(peptides)), function(i) {
     key <- peptides[i, ]
@@ -566,6 +686,7 @@ make_final_qc <- function(design_qc, plate_qc, dose_qc, counter_qc, primary) {
 }
 
 run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NULL, thresholds = default_qc_thresholds()) {
+  manifest <- assay_manifest(raw_data, plate_map, metadata, thresholds)
   raw_data <- enrich_raw_with_plate_map(raw_data, plate_map)
   raw_data <- fill_target_id(raw_data, metadata)
   plate_map <- fill_target_id(plate_map, metadata)
@@ -573,6 +694,7 @@ run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NUL
   eda <- input_eda(raw_data, plate_map)
   design <- validate_design(plate_map, metadata, thresholds)
   plate <- calculate_plate_qc(cleaned, thresholds)
+  intraplate <- intraplate_variability_qc(cleaned, thresholds)
   ref_qc <- reference_control_qc(cleaned, thresholds)
   calibration <- interplate_calibration(cleaned, thresholds)
   normalized <- normalize_responses(calibration$calibrated)
@@ -584,6 +706,7 @@ run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NUL
   exclusions <- cleaned[cleaned$saturated_flag | cleaned$negative_corrected_flag | cleaned$missing_flag, ]
   results <- list(
     qc_thresholds = qc_threshold_table(thresholds),
+    assay_manifest = manifest,
     metadata_completeness = metadata_completeness(metadata, thresholds),
     input_eda = eda,
     cleaned_well_data = cleaned,
@@ -592,6 +715,7 @@ run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NUL
     normalized_results = normalized,
     design_qc = design,
     plate_qc = plate,
+    intraplate_variability_qc = intraplate,
     primary_results = primary,
     sample_qc_table = sample_qc,
     dose_response_results = dose$results,

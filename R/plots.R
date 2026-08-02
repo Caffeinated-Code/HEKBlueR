@@ -13,7 +13,18 @@ hek_theme <- function() {
 }
 
 plate_heatmap_plot <- function(df, value_col = "raw_od", title = "Plate heatmap") {
-  ggplot2::ggplot(df, ggplot2::aes(x = as.integer(col), y = row, fill = .data[[value_col]])) +
+  plot_df <- df
+  plot_df$hover_text <- paste0(
+    "Plate: ", plot_df$plate_id,
+    "<br>Well: ", plot_df$well,
+    "<br>Sample: ", plot_df$sample_id,
+    "<br>Peptide/compound: ", plot_df$peptide_id,
+    "<br>Control type: ", plot_df$control_type,
+    "<br>Assay mode: ", plot_df$assay_mode,
+    "<br>Concentration uM: ", plot_df$concentration_uM,
+    "<br>", value_col, ": ", round(plot_df[[value_col]], 2)
+  )
+  ggplot2::ggplot(plot_df, ggplot2::aes(x = as.integer(col), y = row, fill = .data[[value_col]], text = hover_text)) +
     ggplot2::geom_tile(color = "white", linewidth = 0.45) +
     ggplot2::scale_y_discrete(limits = rev(LETTERS[1:8])) +
     ggplot2::scale_x_continuous(breaks = 1:12) +
@@ -21,7 +32,12 @@ plate_heatmap_plot <- function(df, value_col = "raw_od", title = "Plate heatmap"
     ggplot2::facet_wrap(~ plate_id, ncol = 1) +
     ggplot2::coord_fixed(ratio = 1.05) +
     ggplot2::labs(x = "Column", y = "Row", fill = value_col, title = title) +
-    hek_theme()
+    hek_theme() +
+    ggplot2::theme(
+      axis.text = ggplot2::element_text(size = 12, color = "#16211f", face = "bold"),
+      axis.title = ggplot2::element_text(size = 13, color = "#16211f", face = "bold"),
+      strip.text = ggplot2::element_text(size = 12, face = "bold", color = "#16211f")
+    )
 }
 
 control_boxplot <- function(df) {

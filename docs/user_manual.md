@@ -27,6 +27,8 @@ The plate map should describe what each well contains.
 
 After upload, open **Uploaded Preview** to confirm that HEKBlueR parsed the files correctly.
 
+Open **QC Thresholds** before running analysis if the assay needs thresholds different from the defaults. Each editable threshold shows a recommended range. The selected thresholds are saved with the run and affect the assay identifier.
+
 Open **EDA** before interpreting results. This page checks plate count, well count, missing columns, duplicate wells, missing OD values, saturated OD values, and detected control types.
 
 Open **Cleaned Data** to review blank correction, missing wells, saturated wells, negative corrected values, robust outlier flags, and cleaning actions.
@@ -130,11 +132,14 @@ Counter-Assays shows whether a hit may be caused by:
 
 Use Final QC to export:
 
+- assay manifest
 - final QC table
 - normalized results
 - full run package
 
 The export package is designed for later database loading.
+
+Each run receives a deterministic assay identifier based on raw data, plate map, metadata, and QC thresholds. If any of those inputs change, a new identifier is assigned.
 
 Major plots include download buttons. File names are generated from project metadata, target metadata, plot type, and date.
 
