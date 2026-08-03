@@ -33,9 +33,9 @@ The raw data should include:
 
 The plate map should describe what each well contains.
 
-After upload, open **Uploaded Preview** to confirm that HEKBlueR parsed the files correctly.
+After upload, open **Uploaded Preview** to confirm that the files look correct before analysis.
 
-Open **QC Thresholds** before running analysis if the assay needs thresholds different from the defaults. Each editable threshold shows a recommended range. The selected thresholds are saved with the run and affect the assay identifier.
+Open **QC Thresholds** before running analysis if the assay needs thresholds different from the defaults. Each editable threshold shows a recommended range. If any threshold is changed, a rationale note is required. The selected thresholds and rationale are saved with the run and affect the assay identifier.
 
 Open **EDA** before interpreting results. This page checks plate count, well count, missing columns, duplicate wells, missing OD values, saturated OD values, and detected control types.
 
@@ -99,7 +99,7 @@ Open **Reference & Calibration** to check reference control stability and inter-
 
 ## 6. Review Primary Results
 
-Primary Results shows peptide response by dose.
+Primary Results shows peptide response by dose when dose information is supplied. A true primary screen may use one fixed concentration. Secondary confirmation usually carries the full dose series needed for EC50 or IC50 estimation.
 
 Agonist mode reports activation.
 
@@ -152,7 +152,7 @@ Use Final QC to export:
 
 The export package is designed for later database loading.
 
-Each run receives a deterministic assay identifier based on raw data, plate map, metadata, and QC thresholds. If any of those inputs change, a new identifier is assigned.
+Each run receives a deterministic assay identifier built from target, assay type, peptide IDs, assay date, scientist, and a six-digit change code. The change code is computed from the raw data, plate map, metadata, QC thresholds, threshold-change rationale, and analysis strategy. If any of those inputs change, a new identifier is assigned.
 
 Major plots include download buttons. File names are generated from project metadata, target metadata, plot type, and date.
 

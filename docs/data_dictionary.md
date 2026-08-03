@@ -50,11 +50,16 @@ This format is easy to parse into JSON, CSV, SQLite, DuckDB, or Postgres.
 | Column | Meaning |
 |---|---|
 | `assay_identifier` | deterministic run ID based on raw data, plate map, metadata, and QC thresholds |
+| `change_code` | six-digit code that changes when inputs, metadata, thresholds, rationale, or analysis strategy change |
 | `input_signature` | combined hash for all inputs and thresholds |
 | `raw_data_signature` | hash for raw well-level data |
 | `plate_map_signature` | hash for plate map or well annotations |
 | `metadata_signature` | hash for submitted metadata |
 | `threshold_signature` | hash for selected QC thresholds |
+| `threshold_changed_from_default` | TRUE when active QC thresholds differ from the defaults |
+| `threshold_change_note` | required rationale when default QC thresholds were changed |
+| `assay_type` | assay modules found in the raw data |
+| `peptide_ids` | peptide or compound IDs found in the raw data |
 
 ## Run Documentation
 
@@ -64,6 +69,7 @@ This format is easy to parse into JSON, CSV, SQLite, DuckDB, or Postgres.
 - computed input signatures
 - submitted metadata
 - selected QC thresholds
+- threshold-change rationale
 - analysis parameters
 
 This file is intended for audit trails and later database loading.

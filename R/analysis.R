@@ -20,29 +20,98 @@ object_md5 <- function(x) {
   unname(tools::md5sum(tmp))
 }
 
-assay_manifest <- function(raw_data, plate_map, metadata, thresholds = default_qc_thresholds()) {
+metadata_value <- function(metadata, field, default = "") {
+  if (!all(c("field", "value") %in% names(metadata))) return(default)
+  value <- metadata$value[match(field, metadata$field)]
+  ifelse(is.na(value) || value == "", default, as.character(value))
+}
+
+safe_id_part <- function(x, fallback = "NA", max_chars = 28) {
+  x <- toupper(gsub("[^A-Za-z0-9]+", "-", as.character(x)))
+  x <- gsub("^-|-$", "", x)
+  x <- ifelse(is.na(x) || x == "", fallback, x)
+  substr(x, 1, max_chars)
+}
+
+hash_to_6_digits <- function(hash) {
+  sprintf("%06d", as.integer(strtoi(substr(hash, 1, 7), base = 16L)) %% 1000000)
+}
+
+thresholds_equal <- function(x, y, tolerance = 1e-9) {
+  if (is.list(x) || is.list(y)) {
+    if (!is.list(x) || !is.list(y)) return(FALSE)
+    if (!identical(sort(names(x)), sort(names(y)))) return(FALSE)
+    return(all(vapply(sort(names(x)), function(nm) thresholds_equal(x[[nm]], y[[nm]], tolerance), logical(1))))
+  }
+  if (length(x) != length(y)) return(FALSE)
+  if (is.numeric(x) || is.numeric(y)) {
+    x_num <- as.numeric(x)
+    y_num <- as.numeric(y)
+    if (!identical(is.na(x_num), is.na(y_num))) return(FALSE)
+    return(all(abs(x_num[!is.na(x_num)] - y_num[!is.na(y_num)]) <= tolerance))
+  }
+  identical(as.character(x), as.character(y))
+}
+
+thresholds_changed_from_default <- function(thresholds = default_qc_thresholds()) {
+  !thresholds_equal(thresholds, default_qc_thresholds())
+}
+
+assay_manifest <- function(raw_data, plate_map, metadata, thresholds = default_qc_thresholds(), threshold_change_note = "") {
   raw_sig <- object_md5(raw_data)
   plate_sig <- object_md5(plate_map)
   meta_sig <- object_md5(metadata)
   threshold_sig <- object_md5(thresholds)
-  combined <- object_md5(list(raw = raw_sig, plate_map = plate_sig, metadata = meta_sig, thresholds = threshold_sig))
-  project <- if (all(c("field", "value") %in% names(metadata))) metadata$value[match("project", metadata$field)] else NA_character_
-  target <- if (all(c("field", "value") %in% names(metadata))) metadata$value[match("target_id", metadata$field)] else NA_character_
+  strategy <- "HEKBlueR plate QC, normalization, primary summary, dose-response, counter-assay review"
+  combined <- object_md5(list(raw = raw_sig, plate_map = plate_sig, metadata = meta_sig, thresholds = threshold_sig, threshold_change_note = trimws(threshold_change_note), strategy = strategy))
+  project <- metadata_value(metadata, "project")
+  target <- metadata_value(metadata, "target_id", "UNKNOWN_TARGET")
+  assay_date <- metadata_value(metadata, "assay_date", format(Sys.Date(), "%Y-%m-%d"))
+  scientist <- metadata_value(metadata, "scientist", "UNKNOWN_PERSON")
+  assay_types <- if ("assay_mode" %in% names(raw_data)) paste(sort(unique(raw_data$assay_mode)), collapse = "+") else "unknown"
+  assay_type_id <- if ("assay_mode" %in% names(raw_data)) {
+    modes <- sort(unique(raw_data$assay_mode))
+    paste(vapply(modes, function(mode) switch(mode, agonist = "AGO", antagonist = "ANT", counter = "CTR", unknown = "UNK", safe_id_part(mode, "ASSAY", 6)), character(1)), collapse = "+")
+  } else {
+    "UNK"
+  }
+  peptides <- if ("peptide_id" %in% names(raw_data)) sort(unique(raw_data$peptide_id[!is.na(raw_data$peptide_id) & raw_data$peptide_id != ""])) else character()
+  peptide_label <- if (length(peptides)) paste(head(peptides, 3), collapse = "+") else "NO_PEPTIDE"
+  if (length(peptides) > 3) peptide_label <- paste0(peptide_label, "+N", length(peptides))
+  change_code <- hash_to_6_digits(combined)
+  assay_id <- paste(
+    safe_id_part("HEKBLUER", max_chars = 8),
+    safe_id_part(target, "TARGET"),
+    safe_id_part(assay_type_id, "ASSAY", 18),
+    safe_id_part(peptide_label, "PEPTIDE", 32),
+    safe_id_part(assay_date, "DATE", 10),
+    safe_id_part(scientist, "PERSON", 18),
+    change_code,
+    sep = "-"
+  )
   data.frame(
-    assay_identifier = paste0("HEKBLUER-", toupper(substr(combined, 1, 12))),
+    assay_identifier = assay_id,
+    change_code = change_code,
     input_signature = combined,
     raw_data_signature = raw_sig,
     plate_map_signature = plate_sig,
     metadata_signature = meta_sig,
     threshold_signature = threshold_sig,
-    project = ifelse(is.na(project), "", project),
-    target_id = ifelse(is.na(target), "", target),
+    threshold_changed_from_default = thresholds_changed_from_default(thresholds),
+    threshold_change_note = trimws(threshold_change_note),
+    project = project,
+    target_id = target,
+    assay_type = assay_types,
+    peptide_ids = paste(peptides, collapse = ";"),
+    scientist = scientist,
+    assay_date = assay_date,
+    analysis_strategy = strategy,
     created_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"),
     stringsAsFactors = FALSE
   )
 }
 
-run_documentation_table <- function(manifest, metadata, thresholds = default_qc_thresholds()) {
+run_documentation_table <- function(manifest, metadata, thresholds = default_qc_thresholds(), threshold_change_note = "") {
   threshold_rows <- qc_threshold_table(thresholds)
   threshold_doc <- data.frame(
     assay_identifier = manifest$assay_identifier[1],
@@ -68,17 +137,35 @@ run_documentation_table <- function(manifest, metadata, thresholds = default_qc_
     parameter = names(manifest),
     value = as.character(unlist(manifest[1, ], use.names = FALSE)),
     source = "computed",
-    notes = c(
-      "Unique deterministic run identifier.",
-      "Combined signature of raw data, plate map, metadata, and thresholds.",
-      "Raw data signature.",
-      "Plate map signature.",
-      "Metadata signature.",
-      "QC threshold signature.",
-      "Project metadata.",
-      "Target metadata.",
-      "Run timestamp."
-    )[seq_along(names(manifest))],
+    notes = vapply(names(manifest), function(name) switch(name,
+      assay_identifier = "Readable deterministic run identifier.",
+      change_code = "Six-digit code that changes when inputs, metadata, thresholds, or analysis strategy change.",
+      input_signature = "Combined signature of raw data, plate map, metadata, thresholds, and analysis strategy.",
+      raw_data_signature = "Raw data signature.",
+      plate_map_signature = "Plate map signature.",
+      metadata_signature = "Metadata signature.",
+      threshold_signature = "QC threshold signature.",
+      threshold_changed_from_default = "TRUE when active QC thresholds differ from the defaults.",
+      threshold_change_note = "Required rationale when active QC thresholds differ from the defaults.",
+      project = "Project metadata.",
+      target_id = "Target metadata.",
+      assay_type = "Assay modules found in the raw data.",
+      peptide_ids = "Peptide or compound IDs found in the raw data.",
+      scientist = "Scientist or analyst supplied in metadata.",
+      assay_date = "Assay date supplied in metadata.",
+      analysis_strategy = "Analysis workflow included in the input signature.",
+      created_at = "Run timestamp.",
+      "Computed assay manifest field."
+    ), character(1)),
+    stringsAsFactors = FALSE
+  )
+  threshold_note_doc <- data.frame(
+    assay_identifier = manifest$assay_identifier[1],
+    section = "analysis_parameter",
+    parameter = "threshold_change_note",
+    value = ifelse(trimws(threshold_change_note) == "", manifest$threshold_change_note[1], trimws(threshold_change_note)),
+    source = "scientist-entered",
+    notes = "Required when QC thresholds differ from the defaults.",
     stringsAsFactors = FALSE
   )
   config_doc <- data.frame(
@@ -96,7 +183,7 @@ run_documentation_table <- function(manifest, metadata, thresholds = default_qc_
     ),
     stringsAsFactors = FALSE
   )
-  rbind(manifest_doc, metadata_doc, threshold_doc, config_doc)
+  rbind(manifest_doc, metadata_doc, threshold_doc, threshold_note_doc, config_doc)
 }
 
 fill_target_id <- function(df, metadata) {
@@ -303,41 +390,68 @@ validate_design <- function(plate_map, metadata, thresholds = default_qc_thresho
     ipc_present <- "inter_plate_calibrator" %in% present
     status <- "PASS"
     reasons <- character()
+    flagged_metrics <- character()
+    missing_controls_status <- "PASS"
+    technical_replicates_status <- "PASS"
+    dose_points_status <- "PASS"
+    control_wells_status <- "PASS"
+    inter_plate_calibrator_status <- "PASS"
     if (length(missing_controls)) {
       status <- "FAIL"
+      missing_controls_status <- "FAIL"
+      flagged_metrics <- c(flagged_metrics, "missing_controls")
       reasons <- c(reasons, paste("missing controls:", paste(missing_controls, collapse = ",")))
     }
     if (!is.na(min_tech) && min_tech < thresholds$design$technical_replicates_pass) {
       status <- ifelse(status == "FAIL", "FAIL", "WARN")
+      technical_replicates_status <- "WARN"
+      flagged_metrics <- c(flagged_metrics, "min_technical_replicates")
       reasons <- c(reasons, paste("technical replicates below", thresholds$design$technical_replicates_pass))
     }
-    if (!is.na(min_doses) && assay_mode %in% c("agonist", "antagonist") && min_doses < thresholds$design$dose_points_pass) {
+    dose_response_design <- !is.na(min_doses) && min_doses > 1 && assay_mode %in% c("agonist", "antagonist")
+    if (dose_response_design && min_doses < thresholds$design$dose_points_pass) {
       status <- ifelse(min_doses < thresholds$design$dose_points_warn, "FAIL", ifelse(status == "FAIL", "FAIL", "WARN"))
+      dose_points_status <- ifelse(min_doses < thresholds$design$dose_points_warn, "FAIL", "WARN")
+      flagged_metrics <- c(flagged_metrics, "min_dose_points")
       reasons <- c(reasons, paste("dose-response has fewer than", thresholds$design$dose_points_pass, "concentrations"))
+    } else if (!is.na(min_doses) && min_doses == 1 && assay_mode %in% c("agonist", "antagonist")) {
+      reasons <- c(reasons, "single-dose primary design detected; dose-response QC is not required")
     }
     if (min_control_wells < thresholds$design$control_wells_fail) {
       status <- "FAIL"
+      control_wells_status <- "FAIL"
+      flagged_metrics <- c(flagged_metrics, "min_control_wells")
       reasons <- c(reasons, "too few required control wells")
     } else if (min_control_wells < thresholds$design$control_wells_pass && status != "FAIL") {
       status <- "WARN"
+      control_wells_status <- "WARN"
+      flagged_metrics <- c(flagged_metrics, "min_control_wells")
       reasons <- c(reasons, paste("control wells below preferred count of", thresholds$design$control_wells_pass))
     }
     if (!ipc_present && assay_mode != "antagonist" && status != "FAIL") {
       status <- "WARN"
+      inter_plate_calibrator_status <- "WARN"
+      flagged_metrics <- c(flagged_metrics, "inter_plate_calibrator_present")
       reasons <- c(reasons, "inter-plate calibrator missing")
     }
     data.frame(
       plate_id = pid,
       assay_mode = assay_mode,
       design_status = status,
-      missing_controls = paste(missing_controls, collapse = ";"),
+      flagged_metrics = ifelse(length(flagged_metrics), paste(unique(flagged_metrics), collapse = ";"), "0"),
+      missing_controls = ifelse(length(missing_controls), paste(missing_controls, collapse = ";"), "0"),
+      missing_controls_status = missing_controls_status,
       min_control_wells = min_control_wells,
+      control_wells_status = control_wells_status,
       min_technical_replicates = min_tech,
+      technical_replicates_status = technical_replicates_status,
       min_dose_points = min_doses,
+      dose_points_status = dose_points_status,
       technical_replicate_threshold = thresholds$design$technical_replicates_pass,
       dose_points_pass_threshold = thresholds$design$dose_points_pass,
       control_wells_pass_threshold = thresholds$design$control_wells_pass,
       inter_plate_calibrator_present = ipc_present,
+      inter_plate_calibrator_status = inter_plate_calibrator_status,
       notes = paste(reasons, collapse = "; "),
       stringsAsFactors = FALSE
     )
@@ -345,6 +459,9 @@ validate_design <- function(plate_map, metadata, thresholds = default_qc_thresho
   design <- do.call(rbind, out)
   meta <- metadata_completeness(metadata, thresholds)
   design$metadata_status <- meta$status
+  if (meta$status != "PASS") {
+    design$flagged_metrics <- ifelse(design$flagged_metrics == "0", "metadata_completeness_percent", paste(design$flagged_metrics, "metadata_completeness_percent", sep = ";"))
+  }
   design$metadata_completeness_percent <- meta$value
   design
 }
@@ -813,8 +930,8 @@ make_final_qc <- function(design_qc, plate_qc, dose_qc, counter_qc, primary) {
   cbind(plate_summary[rep(1, nrow(final)), ], final)
 }
 
-run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NULL, thresholds = default_qc_thresholds()) {
-  manifest <- assay_manifest(raw_data, plate_map, metadata, thresholds)
+run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NULL, thresholds = default_qc_thresholds(), threshold_change_note = "") {
+  manifest <- assay_manifest(raw_data, plate_map, metadata, thresholds, threshold_change_note)
   raw_data <- enrich_raw_with_plate_map(raw_data, plate_map)
   raw_data <- fill_target_id(raw_data, metadata)
   plate_map <- fill_target_id(plate_map, metadata)
@@ -835,7 +952,7 @@ run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NUL
   results <- list(
     qc_thresholds = qc_threshold_table(thresholds),
     assay_manifest = manifest,
-    run_documentation = run_documentation_table(manifest, metadata, thresholds),
+    run_documentation = run_documentation_table(manifest, metadata, thresholds, threshold_change_note),
     metadata_completeness = metadata_completeness(metadata, thresholds),
     input_eda = eda,
     raw_data_summary = raw_data_summary(raw_data),

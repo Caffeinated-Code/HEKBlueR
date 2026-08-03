@@ -18,6 +18,7 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 - scores required and optional metadata completeness separately
 - checks controls, replicates, dose series, and metadata completeness
 - exports the active QC threshold table used for every automated flag
+- requires a rationale when default QC thresholds are changed
 - calculates plate QC metrics
 - checks reference control stability
 - performs inter-plate calibration when a shared calibrator or shared positive control is present
@@ -25,7 +26,7 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 - fits simple dose-response curves
 - reports detailed curve QC, including dose count, curve range, residuals, plateaus, Hill slope, and replicate noise
 - reports sample-level PASS, WARN, and FAIL calls based on explicit QC thresholds
-- assigns a deterministic assay identifier from raw data, plate map, metadata, and QC thresholds
+- assigns a readable deterministic assay identifier from target, assay type, peptide IDs, assay date, scientist, and a six-digit change code
 - provides an interactive dose-response workspace with curve plots, fit tables, QC tables, replicate noise, and QC glossary
 - flags noisy or weak curves
 - flags likely assay artifacts
@@ -40,7 +41,7 @@ The demo dataset contains:
 
 - 1 target
 - 3 peptides
-- primary agonist plate
+- dose-enabled agonist demo plate
 - antagonist dose-response plate
 - counter-assay plate
 - viability and assay-interference examples
@@ -125,7 +126,7 @@ Each run can export:
 
 Public HEK-Blue assay results are often available as summarized bioactivity values. Raw plate-reader files with full plate maps, control wells, reagent metadata, and counter-assay layouts are less commonly released.
 
-The demo uses simulated raw plate data so the complete QC workflow can be shown without missing design information.
+The demo uses simulated raw plate data so the complete QC workflow can be shown without missing design information. Many real primary HTS runs use one fixed concentration. Dose-response curves are usually run later for confirmation. HEKBlueR supports partial uploads, including primary-only, secondary-only, counter-assay-only, or combined runs.
 
 ## Documentation
 

@@ -13,7 +13,7 @@ source("R/analysis.R")
 source("R/plots.R")
 source("R/simulate_data.R")
 
-APP_VERSION <- "0.6.0"
+APP_VERSION <- "0.7.0"
 
 metric_help <- list(
   "Z-prime" = "Z-prime measures separation between positive and negative controls. Values above 0.5 are preferred. Values from 0.3 to 0.5 need review. Lower values usually mean the assay window is weak.",
@@ -23,6 +23,7 @@ metric_help <- list(
   "Signal window" = "Signal window is positive control minus negative control. It is the usable assay range after blank correction.",
   "Control CV" = "Control coefficient of variation measures control stability. Values above 20 percent often indicate pipetting, reagent, incubation, or reader variability.",
   "Replicate CV" = "Replicate CV measures technical replicate noise at a peptide dose. High CV can make hit calls and curve fits unreliable.",
+  "Primary replicate CV" = "Primary replicate CV measures agreement among technical replicate wells for a primary response summary. High values can make single-dose hit calls unreliable.",
   "Edge effect" = "Edge effect compares edge wells to center wells. A large difference can reflect evaporation, temperature gradients, or plate handling effects.",
   "Row and column bias" = "Row and column bias checks spatial drift across the plate. This can indicate dispense order, incubation gradient, or reader position effects.",
   "Inter-plate calibration" = "Inter-plate calibration aligns plates using a shared calibrator or shared positive control. Drift above 0.15 OD is flagged for review.",
@@ -40,8 +41,12 @@ metric_link <- function(label) {
   actionLink(paste0("help_", gsub("[^A-Za-z0-9]", "_", label)), label, class = "metric-help")
 }
 
+is_empty_upload <- function(file_input) {
+  is.null(file_input) || !is.data.frame(file_input) || !nrow(file_input) || !"datapath" %in% names(file_input) || is.na(file_input$datapath[1]) || file_input$datapath[1] == ""
+}
+
 read_uploaded_csv <- function(file_input, demo_path) {
-  if (is.null(file_input)) read.csv(demo_path, stringsAsFactors = FALSE) else read.csv(file_input$datapath, stringsAsFactors = FALSE)
+  if (is_empty_upload(file_input)) read.csv(demo_path, stringsAsFactors = FALSE) else read.csv(file_input$datapath[1], stringsAsFactors = FALSE)
 }
 
 status_badge <- function(status) {
@@ -104,6 +109,43 @@ download_plot <- function(plot_expr, prefix, active_inputs) {
       ggplot2::ggsave(file, plot = plot_expr(), width = 11, height = 7, dpi = 180)
     }
   )
+}
+
+download_table <- function(table_expr, prefix, analysis_results = NULL) {
+  downloadHandler(
+    filename = function() {
+      res <- if (is.null(analysis_results)) NULL else analysis_results()
+      assay_id <- if (!is.null(res) && !is.null(res$assay_manifest)) res$assay_manifest$assay_identifier[1] else paste0("hekblue_", format(Sys.Date(), "%Y%m%d"))
+      paste0(clean_name(paste(assay_id, prefix, sep = "_")), ".csv")
+    },
+    content = function(file) {
+      write.csv(table_expr(), file, row.names = FALSE, na = "")
+    }
+  )
+}
+
+threshold_change_required <- function(thresholds) {
+  thresholds_changed_from_default(thresholds)
+}
+
+liquid_handler_plate_map <- function(plate_map) {
+  if (is.null(plate_map) || !nrow(plate_map)) return(data.frame())
+  out <- plate_map
+  if (!"row" %in% names(out)) out$row <- substr(out$well, 1, 1)
+  if (!"col" %in% names(out)) out$col <- substr(out$well, 2, 3)
+  if (!"control_type" %in% names(out)) out$control_type <- "unknown"
+  if (!"sample_id" %in% names(out)) out$sample_id <- ""
+  if (!"peptide_id" %in% names(out)) out$peptide_id <- ""
+  if (!"concentration_uM" %in% names(out)) out$concentration_uM <- NA_real_
+  wanted <- c("plate_id", "well", "row", "col", "assay_mode", "control_type", "sample_id", "peptide_id", "concentration_uM", "technical_replicate", "biological_replicate")
+  for (nm in setdiff(wanted, names(out))) out[[nm]] <- NA
+  out <- out[wanted]
+  names(out) <- c("destination_plate", "destination_well", "destination_row", "destination_column", "assay_mode", "sample_type", "sample_id", "compound_id", "concentration_uM", "technical_replicate", "biological_replicate")
+  out$transfer_volume_uL <- NA_real_
+  out$source_plate <- ""
+  out$source_well <- ""
+  out$notes <- ""
+  out[order(out$destination_plate, out$destination_row, out$destination_column), ]
 }
 
 schema_table <- data.frame(
@@ -244,8 +286,12 @@ ui <- page_navbar(
     .plot-card .html-widget, .plot-card .shiny-plot-output, .plot-card .js-plotly-plot { width: 100% !important; min-height: 460px !important; height: 460px !important; }
     .plot-card.plot-tall .card-body { min-height: 720px; }
     .plot-card.plot-tall .html-widget, .plot-card.plot-tall .shiny-plot-output, .plot-card.plot-tall .js-plotly-plot { min-height: 700px !important; height: 700px !important; }
-    .plot-card.plot-plate .card-body { min-height: 980px; }
-    .plot-card.plot-plate .html-widget, .plot-card.plot-plate .shiny-plot-output, .plot-card.plot-plate .js-plotly-plot { min-height: 960px !important; height: 960px !important; }
+    .plot-card.plot-plate .card-body { min-height: 780px; }
+    .plot-card.plot-plate .html-widget, .plot-card.plot-plate .shiny-plot-output, .plot-card.plot-plate .js-plotly-plot { min-height: 760px !important; height: 760px !important; }
+    .plot-card.plot-map .card-body { min-height: 700px; }
+    .plot-card.plot-map .html-widget, .plot-card.plot-map .shiny-plot-output, .plot-card.plot-map .js-plotly-plot { min-height: 680px !important; height: 680px !important; }
+    .demo-side { display: grid; gap: 1rem; align-content: start; }
+    .demo-side .download-row .btn { margin-bottom: 0.25rem; }
     .plot-card.plot-wide .card-body { min-height: 560px; }
     .plot-card.plot-wide .html-widget, .plot-card.plot-wide .shiny-plot-output, .plot-card.plot-wide .js-plotly-plot { min-height: 540px !important; height: 540px !important; }
     .upload-compact .bslib-card { box-shadow: none; }
@@ -315,18 +361,20 @@ ui <- page_navbar(
         span(" "),
         actionButton("run_analysis", "Run analysis", class = "btn-success")
       ),
-      card(
-        card_header("Demo data downloads"),
-        p("Download these files to see the expected format."),
-        div(class = "download-row",
-          downloadButton("download_demo_raw", "Raw OD CSV"),
-          downloadButton("download_demo_plate_map", "Plate map CSV"),
-          downloadButton("download_demo_metadata", "Metadata CSV"),
-          downloadButton("download_demo_peptides", "Peptide metadata CSV"),
-          downloadButton("download_demo_target", "Target metadata CSV")
+      div(
+        class = "demo-side",
+        card(
+          card_header("Demo data downloads"),
+          p("Download these files to see the expected format."),
+          div(class = "download-row",
+            downloadButton("download_demo_raw", "Raw OD CSV"),
+            downloadButton("download_demo_plate_map", "Plate map CSV"),
+            downloadButton("download_demo_metadata", "Metadata CSV"),
+            downloadButton("download_demo_peptides", "Peptide metadata CSV"),
+            downloadButton("download_demo_target", "Target metadata CSV")
+          )
         ),
-        hr(),
-        uiOutput("run_status")
+        card(card_header("Run status"), uiOutput("run_status"))
       )
     )
   ),
@@ -390,6 +438,11 @@ ui <- page_navbar(
   nav_panel(
     "QC Thresholds",
     div(class = "section-note", "Defaults are conservative starting points for cell-based screening. Adjust them only when the assay biology, controls, and validation data support a different rule."),
+    card(
+      card_header(tagList("Threshold change note", span(class = "field-badge required", "Required if changed"))),
+      p(class = "small-note", "Required when any active threshold differs from the default. The note is saved with the run documentation and changes the assay identifier."),
+      textAreaInput("threshold_change_note", NULL, "", height = "90px", placeholder = "Example: validated TLR8 assay window supports a Z-prime warning floor of 0.25 for this reagent lot.")
+    ),
     tabsetPanel(
       tabPanel(
         "Plate QC",
@@ -439,12 +492,14 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Uploaded Preview",
-    div(class = "section-note", "Use these tabs to inspect exactly what HEKBlueR parsed before analysis. This keeps large tables navigable."),
+    div(class = "section-note", "Confirm the uploaded files before running QC or interpreting results."),
     tabsetPanel(
-      tabPanel("Raw data", card(card_header("Raw data preview"), DTOutput("raw_preview"))),
-      tabPanel("Plate map", card(card_header("Plate map preview"), DTOutput("plate_map_preview"))),
-      tabPanel("Metadata", card(card_header("Metadata preview"), DTOutput("metadata_preview"))),
-      tabPanel("Expected schema", card(card_header("Required and recommended fields"), DTOutput("schema_table_preview")))
+      tabPanel("Raw data", card(card_header("Raw data preview"), DTOutput("raw_preview"), div(class = "download-row", downloadButton("download_raw_preview", "Download raw preview")))),
+      tabPanel("Plate map view", card(class = "plot-card plot-map", card_header("Plate map visualization"), plotlyOutput("plate_map_overview", height = "680px"))),
+      tabPanel("Plate map CSV", card(card_header("Plate map table"), DTOutput("plate_map_preview"), div(class = "download-row", downloadButton("download_plate_map_preview", "Download plate map")))),
+      tabPanel("Liquid handler map", card(card_header("Liquid handler-ready map"), DTOutput("liquid_handler_preview"), div(class = "download-row", downloadButton("download_liquid_handler_map", "Download liquid handler map")))),
+      tabPanel("Metadata", card(card_header("Metadata preview"), DTOutput("metadata_preview"), div(class = "download-row", downloadButton("download_metadata_preview", "Download metadata")))),
+      tabPanel("Expected schema", card(card_header("Required and recommended fields"), DTOutput("schema_table_preview"), div(class = "download-row", downloadButton("download_schema_preview", "Download schema"))))
     )
   ),
   nav_panel(
@@ -455,11 +510,11 @@ ui <- page_navbar(
         "Summary",
         layout_columns(
           col_widths = c(6, 6),
-          card(card_header("Raw data summary"), DTOutput("raw_data_summary_table")),
-          card(card_header("Metadata summary"), DTOutput("metadata_summary_table"))
+          card(card_header("Raw data summary"), DTOutput("raw_data_summary_table"), div(class = "download-row", downloadButton("download_raw_data_summary", "Download raw summary"))),
+          card(card_header("Metadata summary"), DTOutput("metadata_summary_table"), div(class = "download-row", downloadButton("download_metadata_summary", "Download metadata summary")))
         )
       ),
-      tabPanel("Input checks", card(card_header("Input EDA checks"), DTOutput("eda_table"))),
+      tabPanel("Input checks", card(card_header("Input EDA checks"), DTOutput("eda_table"), div(class = "download-row", downloadButton("download_eda_table", "Download input checks")))),
       tabPanel("Raw OD distribution", card(class = "plot-card", card_header("Raw OD distribution"), plotlyOutput("raw_distribution", height = "500px"), div(class = "download-row", downloadButton("download_raw_distribution", "Download raw OD plot"))))
     )
   ),
@@ -467,8 +522,8 @@ ui <- page_navbar(
     "Cleaned Data",
     div(class = "section-note", "Review cleaning actions first, then inspect well-level rows only when a flag needs follow-up."),
     tabsetPanel(
-      tabPanel("Cleaning summary", card(card_header("Cleaning action counts"), DTOutput("cleaning_summary"))),
-      tabPanel("Well-level review", card(card_header("Cleaned well data"), DTOutput("cleaned_table")))
+      tabPanel("Cleaning summary", card(card_header("Cleaning action counts"), DTOutput("cleaning_summary"), div(class = "download-row", downloadButton("download_cleaning_summary", "Download cleaning summary")))),
+      tabPanel("Well-level review", card(card_header("Cleaned well data"), DTOutput("cleaned_table"), div(class = "download-row", downloadButton("download_cleaned_table", "Download cleaned data"))))
     )
   ),
   nav_panel(
@@ -480,42 +535,43 @@ ui <- page_navbar(
       card(card_header("Optional score"), uiOutput("optional_metadata_card"))
     ),
     tabsetPanel(
-      tabPanel("All metadata", card(card_header("Submitted metadata"), DTOutput("metadata_table"))),
-      tabPanel("Required fields", card(card_header("Required metadata"), DTOutput("required_metadata_table"))),
-      tabPanel("Optional fields", card(card_header("Optional metadata"), DTOutput("optional_metadata_table")))
+      tabPanel("All metadata", card(card_header("Submitted metadata"), DTOutput("metadata_table"), div(class = "download-row", downloadButton("download_metadata_table", "Download metadata")))),
+      tabPanel("Required fields", card(card_header("Required metadata"), DTOutput("required_metadata_table"), div(class = "download-row", downloadButton("download_required_metadata_table", "Download required fields")))),
+      tabPanel("Optional fields", card(card_header("Optional metadata"), DTOutput("optional_metadata_table"), div(class = "download-row", downloadButton("download_optional_metadata_table", "Download optional fields"))))
     )
   ),
-  nav_panel("Design QC", card(card_header("Experimental design review"), DTOutput("design_qc_table"))),
+  nav_panel("Design QC", card(card_header("Experimental design review"), DTOutput("design_qc_table"), div(class = "download-row", downloadButton("download_design_qc_table", "Download design QC")))),
   nav_panel(
     "Plate QC",
-    card(card_header(tagList("QC metrics: ", metric_link("Z-prime"), " | ", metric_link("Robust Z-prime"), " | ", metric_link("SSMD"), " | ", metric_link("Control CV"), " | ", metric_link("Edge effect"))), DTOutput("plate_qc_table")),
-    card(card_header("Intra-plate variability and spatial QC"), DTOutput("intraplate_qc_table")),
-    card(class = "plot-card", card_header("Z-prime summary"), plotlyOutput("qc_plot", height = "430px"), div(class = "download-row", downloadButton("download_qc_plot", "Download Z-prime plot")))
+    tabsetPanel(
+      tabPanel("QC metrics table", card(card_header(tagList("QC metrics: ", metric_link("Z-prime"), " | ", metric_link("Robust Z-prime"), " | ", metric_link("SSMD"), " | ", metric_link("Control CV"), " | ", metric_link("Edge effect"))), DTOutput("plate_qc_table"), div(class = "download-row", downloadButton("download_plate_qc_table", "Download plate QC")))),
+      tabPanel("Intra-plate variability and spatial QC", card(card_header("Intra-plate variability and spatial QC"), DTOutput("intraplate_qc_table"), div(class = "download-row", downloadButton("download_intraplate_qc_table", "Download intra-plate QC")))),
+      tabPanel("Z-prime summary", card(class = "plot-card", card_header("Z-prime summary"), plotlyOutput("qc_plot", height = "430px"), div(class = "download-row", downloadButton("download_qc_plot", "Download Z-prime plot"))))
+    )
   ),
   nav_panel(
     "Reference & Calibration",
-    layout_columns(
-      col_widths = c(6, 6),
-      card(card_header("Reference control stability"), DTOutput("reference_qc_table")),
-      card(card_header(tagList("Inter-plate calibration ", metric_link("Inter-plate calibration"))), DTOutput("calibration_table"))
-    ),
-    card(class = "plot-card", card_header("Calibration drift"), plotlyOutput("calibration_plot", height = "420px"), div(class = "download-row", downloadButton("download_calibration_plot", "Download calibration plot")))
+    tabsetPanel(
+      tabPanel("Reference control stability", card(card_header("Reference control stability"), DTOutput("reference_qc_table"), div(class = "download-row", downloadButton("download_reference_qc_table", "Download reference QC")))),
+      tabPanel("Inter-plate calibration", card(card_header(tagList("Inter-plate calibration ", metric_link("Inter-plate calibration"))), DTOutput("calibration_table"), div(class = "download-row", downloadButton("download_calibration_table", "Download calibration table")))),
+      tabPanel("Calibration drift", card(class = "plot-card", card_header("Calibration drift"), plotlyOutput("calibration_plot", height = "420px"), div(class = "download-row", downloadButton("download_calibration_plot", "Download calibration plot"))))
+    )
   ),
   nav_panel(
     "Plate Layout",
     tabsetPanel(
-      tabPanel("Raw OD", card(class = "plot-card plot-plate", card_header("Raw OD heatmap"), plotlyOutput("raw_heatmap", height = "960px"), div(class = "download-row", downloadButton("download_raw_heatmap", "Download raw heatmap")))),
-      tabPanel("Normalized", card(class = "plot-card plot-plate", card_header("Normalized heatmap"), plotlyOutput("normalized_heatmap", height = "960px"), div(class = "download-row", downloadButton("download_norm_heatmap", "Download normalized heatmap"))))
+      tabPanel("Raw OD", card(class = "plot-card plot-plate", card_header("Raw OD heatmap"), plotlyOutput("raw_heatmap", height = "760px"), div(class = "download-row", downloadButton("download_raw_heatmap", "Download raw heatmap")))),
+      tabPanel("Normalized", card(class = "plot-card plot-plate", card_header("Normalized heatmap"), plotlyOutput("normalized_heatmap", height = "760px"), div(class = "download-row", downloadButton("download_norm_heatmap", "Download normalized heatmap"))))
     )
   ),
   nav_panel(
     "Primary Results",
     div(class = "section-note", "Primary results are split by analysis task so reviewers can move from tables to plots without scrolling through one long page."),
     tabsetPanel(
-      tabPanel("All results", card(card_header(tagList("Primary screen table ", metric_link("Replicate CV"))), DTOutput("primary_table"))),
-      tabPanel("Agonist", card(card_header("Agonist results"), DTOutput("primary_agonist_table"))),
-      tabPanel("Antagonist", card(card_header("Antagonist results"), DTOutput("primary_antagonist_table"))),
-      tabPanel("Sample QC", card(card_header("Sample-level QC summary"), DTOutput("sample_qc_table"))),
+      tabPanel("All results", card(card_header(tagList("Primary screen table ", metric_link("Primary replicate CV"))), DTOutput("primary_table"), div(class = "download-row", downloadButton("download_primary_table", "Download primary results")))),
+      tabPanel("Agonist", card(card_header("Agonist results"), DTOutput("primary_agonist_table"), div(class = "download-row", downloadButton("download_primary_agonist_table", "Download agonist results")))),
+      tabPanel("Antagonist", card(card_header("Antagonist results"), DTOutput("primary_antagonist_table"), div(class = "download-row", downloadButton("download_primary_antagonist_table", "Download antagonist results")))),
+      tabPanel("Sample QC", card(card_header("Sample-level QC summary"), DTOutput("sample_qc_table"), div(class = "download-row", downloadButton("download_sample_qc_table", "Download sample QC")))),
       tabPanel("Waterfall", card(class = "plot-card plot-tall", card_header("Interactive waterfall plot"), plotlyOutput("waterfall", height = "700px"), div(class = "download-row", downloadButton("download_waterfall", "Download waterfall plot")))),
       tabPanel("Replicate noise",
         div(class = "section-note", "Replicate CV shows how much technical replicate wells disagree at each dose. Lower values mean the dose summary is more stable. High values mean a hit call may reflect pipetting, edge effects, cell variability, or readout noise instead of biology."),
@@ -528,8 +584,8 @@ ui <- page_navbar(
     div(class = "section-note", "Dose-response is the main review workspace. The fitted curve plot is interactive. QC tables cover potency range, residuals, plateaus, monotonicity, and replicate noise."),
     tabsetPanel(
       tabPanel("Interactive curves", card(class = "plot-card plot-tall", card_header(tagList("Dose-response plot ", metric_link("EC50 or IC50"), " | ", metric_link("Hill slope"))), plotlyOutput("dose_plot", height = "700px"), div(class = "download-row", downloadButton("download_dose_plot", "Download dose-response plot")))),
-      tabPanel("Curve fit table", card(card_header(tagList("Dose-response results ", metric_link("Dynamic range"), " | ", metric_link("RMSE"))), DTOutput("dose_table"))),
-      tabPanel("Curve QC table", card(card_header(tagList("Detailed curve QC ", metric_link("Plateau checks"), " | ", metric_link("Monotonicity"))), DTOutput("dose_qc_table"))),
+      tabPanel("Curve fit table", card(card_header(tagList("Dose-response results ", metric_link("Dynamic range"), " | ", metric_link("RMSE"))), DTOutput("dose_table"), div(class = "download-row", downloadButton("download_dose_table", "Download curve fits")))),
+      tabPanel("Curve QC table", card(card_header(tagList("Detailed curve QC ", metric_link("Plateau checks"), " | ", metric_link("Monotonicity"))), DTOutput("dose_qc_table"), div(class = "download-row", downloadButton("download_dose_qc_table", "Download curve QC")))),
       tabPanel("Replicate noise",
         div(class = "section-note", "Use this plot before trusting EC50 or IC50. A smooth curve with high replicate CV at key doses is less reliable than a curve with consistent replicate wells. Review points above the warning line before advancing a compound."),
         card(class = "plot-card plot-wide", card_header(tagList("Replicate noise by dose ", metric_link("Replicate CV"))), plotlyOutput("replicate_cv_plot", height = "540px"), div(class = "download-row", downloadButton("download_replicate_cv_plot", "Download replicate CV plot")))
@@ -539,8 +595,8 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Counter-Assays",
-    card(card_header("Counter-assay QC"), DTOutput("counter_table")),
-    card(card_header("Artifact-aware hit table"), DTOutput("hit_table"))
+    card(card_header("Counter-assay QC"), DTOutput("counter_table"), div(class = "download-row", downloadButton("download_counter_table", "Download counter QC"))),
+    card(card_header("Artifact-aware hit table"), DTOutput("hit_table"), div(class = "download-row", downloadButton("download_hit_table", "Download hit table")))
   ),
   nav_panel(
     "Plots",
@@ -559,9 +615,9 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Final QC",
-    card(card_header("Assay manifest"), DTOutput("assay_manifest_table")),
-    card(card_header("Run documentation"), DTOutput("run_documentation_table")),
-    card(card_header("Final QC table"), DTOutput("final_qc_table")),
+    card(card_header("Assay manifest"), DTOutput("assay_manifest_table"), div(class = "download-row", downloadButton("download_assay_manifest_table", "Download assay manifest"))),
+    card(card_header("Run documentation"), DTOutput("run_documentation_table"), div(class = "download-row", downloadButton("download_run_documentation_table", "Download run documentation"))),
+    card(card_header("Final QC table"), DTOutput("final_qc_table"), div(class = "download-row", downloadButton("download_final_qc_table", "Download final QC"))),
     card(card_header("Export"), div(class = "download-row", downloadButton("download_final_qc", "Final QC CSV"), downloadButton("download_normalized", "Normalized results CSV"), downloadButton("download_package", "Run package ZIP")))
   )
 )
@@ -594,17 +650,17 @@ server <- function(input, output, session) {
   })
 
   get_inputs <- reactive({
-    if (!demo_loaded() && is.null(input$raw_file)) return(NULL)
+    if (!demo_loaded() && is_empty_upload(input$raw_file)) return(NULL)
     raw_data <- read_uploaded_csv(input$raw_file, "data/simulated/raw_plate_reader.csv")
-    plate_map <- if (!is.null(input$plate_map_file)) {
-      read.csv(input$plate_map_file$datapath, stringsAsFactors = FALSE)
+    plate_map <- if (!is_empty_upload(input$plate_map_file)) {
+      read.csv(input$plate_map_file$datapath[1], stringsAsFactors = FALSE)
     } else if (demo_loaded()) {
       read.csv("data/simulated/plate_map.csv", stringsAsFactors = FALSE)
     } else {
       raw_data
     }
-    metadata <- if (!is.null(input$metadata_file)) {
-      read.csv(input$metadata_file$datapath, stringsAsFactors = FALSE)
+    metadata <- if (!is_empty_upload(input$metadata_file)) {
+      read.csv(input$metadata_file$datapath[1], stringsAsFactors = FALSE)
     } else if (demo_loaded()) {
       read.csv("data/simulated/run_metadata.csv", stringsAsFactors = FALSE)
     } else {
@@ -621,15 +677,30 @@ server <- function(input, output, session) {
 
   observeEvent(input$run_analysis, {
     dat <- get_inputs()
-    validate(need(!is.null(dat), "Load demo data or upload raw files first."))
+    if (is.null(dat)) {
+      showNotification("Load demo data or upload raw files first.", type = "error")
+      return()
+    }
     thresholds <- thresholds_from_input(input)
-    sig <- analysis_signature(list(inputs = dat, thresholds = thresholds))
+    threshold_note <- trimws(input$threshold_change_note %||% "")
+    if (threshold_change_required(thresholds) && !nzchar(threshold_note)) {
+      showNotification("Add a threshold change note before running analysis.", type = "error")
+      return()
+    }
+    sig <- analysis_signature(list(inputs = dat, thresholds = thresholds, threshold_change_note = threshold_note))
     if (!is.null(analysis_cache$signature) && identical(sig, analysis_cache$signature)) {
       results <- analysis_cache$results
       analysis_cache$message <- "Inputs unchanged. Cached analysis was reused."
       showNotification("Inputs unchanged. Cached analysis reused.", type = "message")
     } else {
-      results <- run_hekblue_analysis(dat$raw_data, dat$plate_map, dat$metadata, thresholds = thresholds)
+      results <- tryCatch(
+        run_hekblue_analysis(dat$raw_data, dat$plate_map, dat$metadata, thresholds = thresholds, threshold_change_note = threshold_note),
+        error = function(e) {
+          showNotification(paste("Analysis failed:", conditionMessage(e)), type = "error", duration = 12)
+          NULL
+        }
+      )
+      if (is.null(results)) return()
       prior <- assay_history()
       if (nrow(prior)) {
         manifest <- results$assay_manifest[1, ]
@@ -708,6 +779,7 @@ server <- function(input, output, session) {
 
   output$raw_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload raw data."))); status_datatable(head(dat$raw_data, 200), NULL, 12) })
   output$plate_map_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload a plate map."))); status_datatable(head(dat$plate_map, 200), NULL, 12) })
+  output$liquid_handler_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload a plate map."))); status_datatable(head(liquid_handler_plate_map(dat$plate_map), 200), NULL, 12) })
   output$metadata_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or enter metadata."))); status_datatable(dat$metadata, NULL, 15) })
   output$metadata_table <- renderDT({ req(active_inputs()); status_datatable(active_inputs()$metadata, NULL, 15) })
   output$required_metadata_table <- renderDT({
@@ -731,7 +803,22 @@ server <- function(input, output, session) {
     z$status <- ifelse(z$cleaning_action == "KEEP", "PASS", "WARN")
     status_datatable(z, "status", 10)
   })
-  output$design_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$design_qc, "design_status", 10) })
+  output$design_qc_table <- renderDT({
+    req(analysis_results())
+    df <- analysis_results()$design_qc
+    dt <- status_datatable(df, "design_status", 10)
+    status_cols <- intersect(c("missing_controls_status", "control_wells_status", "technical_replicates_status", "dose_points_status", "inter_plate_calibrator_status", "metadata_status"), names(df))
+    for (col in status_cols) {
+      dt <- formatStyle(
+        dt,
+        col,
+        backgroundColor = styleEqual(c("PASS", "WARN", "FAIL"), c("#ffffff", "#fff1cc", "#f9d7d7")),
+        color = styleEqual(c("PASS", "WARN", "FAIL"), c("#143f2d", "#593a00", "#5b1111")),
+        fontWeight = styleEqual(c("WARN", "FAIL"), c("800", "800"))
+      )
+    }
+    dt
+  })
   output$threshold_recommendations_table <- renderDT({ status_datatable(qc_threshold_recommendations(), NULL, 20) })
   output$threshold_table <- renderDT({ status_datatable(qc_threshold_table(thresholds_from_input(input)), NULL, 20) })
   output$plate_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$plate_qc, "plate_qc_status", 10) })
@@ -772,6 +859,7 @@ server <- function(input, output, session) {
   replicate_cv_obj <- reactive({ req(analysis_results()); replicate_cv_plot(analysis_results()$primary_results) })
   calibration_plot_obj <- reactive({ req(analysis_results()); calibration_plot(analysis_results()$interplate_calibration) })
 
+  output$plate_map_overview <- renderPlotly({ dat <- get_inputs(); req(dat); plate_map_overview_plotly(dat$plate_map) })
   output$raw_heatmap <- renderPlotly(raw_heatmap_interactive_obj())
   output$normalized_heatmap <- renderPlotly(norm_heatmap_interactive_obj())
   output$qc_plot <- renderPlotly(plotly::layout(ggplotly(qc_plot_obj()), margin = list(l = 120, r = 30, t = 60, b = 50)))
@@ -809,6 +897,58 @@ server <- function(input, output, session) {
   output$download_demo_metadata <- downloadHandler(filename = function() "hekblue_demo_run_metadata.csv", content = function(file) file.copy("data/simulated/run_metadata.csv", file))
   output$download_demo_peptides <- downloadHandler(filename = function() "hekblue_demo_peptide_metadata.csv", content = function(file) file.copy("data/simulated/peptide_metadata.csv", file))
   output$download_demo_target <- downloadHandler(filename = function() "hekblue_demo_target_metadata.csv", content = function(file) file.copy("data/simulated/target_metadata.csv", file))
+
+  output$download_raw_preview <- download_table(function() { req(get_inputs()); get_inputs()$raw_data }, "raw_preview")
+  output$download_plate_map_preview <- download_table(function() { req(get_inputs()); get_inputs()$plate_map }, "plate_map")
+  output$download_liquid_handler_map <- download_table(function() { req(get_inputs()); liquid_handler_plate_map(get_inputs()$plate_map) }, "liquid_handler_plate_map")
+  output$download_metadata_preview <- download_table(function() { req(get_inputs()); get_inputs()$metadata }, "metadata")
+  output$download_schema_preview <- download_table(function() schema_table, "expected_schema")
+  output$download_design_qc_table <- download_table(function() { req(analysis_results()); analysis_results()$design_qc }, "design_qc", analysis_results)
+  output$download_plate_qc_table <- download_table(function() { req(analysis_results()); analysis_results()$plate_qc }, "plate_qc", analysis_results)
+  output$download_intraplate_qc_table <- download_table(function() { req(analysis_results()); analysis_results()$intraplate_variability_qc }, "intraplate_spatial_qc", analysis_results)
+  output$download_reference_qc_table <- download_table(function() { req(analysis_results()); analysis_results()$reference_control_qc }, "reference_control_qc", analysis_results)
+  output$download_calibration_table <- download_table(function() { req(analysis_results()); analysis_results()$interplate_calibration }, "interplate_calibration", analysis_results)
+  output$download_raw_data_summary <- download_table(function() { req(analysis_results()); analysis_results()$raw_data_summary }, "raw_data_summary", analysis_results)
+  output$download_metadata_summary <- download_table(function() { req(analysis_results()); analysis_results()$metadata_summary }, "metadata_summary", analysis_results)
+  output$download_eda_table <- download_table(function() { req(analysis_results()); analysis_results()$input_eda }, "input_eda_checks", analysis_results)
+  output$download_cleaning_summary <- download_table(function() {
+    req(analysis_results())
+    z <- as.data.frame(table(analysis_results()$cleaned_well_data$cleaning_action), stringsAsFactors = FALSE)
+    names(z) <- c("cleaning_action", "well_count")
+    z$status <- ifelse(z$cleaning_action == "KEEP", "PASS", "WARN")
+    z
+  }, "cleaning_summary", analysis_results)
+  output$download_cleaned_table <- download_table(function() { req(analysis_results()); analysis_results()$cleaned_well_data }, "cleaned_well_data", analysis_results)
+  output$download_metadata_table <- download_table(function() { req(active_inputs()); active_inputs()$metadata }, "submitted_metadata", analysis_results)
+  output$download_required_metadata_table <- download_table(function() {
+    req(active_inputs())
+    md <- active_inputs()$metadata
+    md[md$required %in% c(TRUE, "TRUE", "true", "1"), , drop = FALSE]
+  }, "required_metadata", analysis_results)
+  output$download_optional_metadata_table <- download_table(function() {
+    req(active_inputs())
+    md <- active_inputs()$metadata
+    md[!(md$required %in% c(TRUE, "TRUE", "true", "1")), , drop = FALSE]
+  }, "optional_metadata", analysis_results)
+  output$download_primary_table <- download_table(function() { req(analysis_results()); analysis_results()$primary_results }, "primary_results", analysis_results)
+  output$download_primary_agonist_table <- download_table(function() {
+    req(analysis_results())
+    z <- analysis_results()$primary_results
+    z[z$assay_mode == "agonist", , drop = FALSE]
+  }, "primary_agonist_results", analysis_results)
+  output$download_primary_antagonist_table <- download_table(function() {
+    req(analysis_results())
+    z <- analysis_results()$primary_results
+    z[z$assay_mode == "antagonist", , drop = FALSE]
+  }, "primary_antagonist_results", analysis_results)
+  output$download_sample_qc_table <- download_table(function() { req(analysis_results()); analysis_results()$sample_qc_table }, "sample_qc", analysis_results)
+  output$download_dose_table <- download_table(function() { req(analysis_results()); analysis_results()$dose_response_results }, "dose_response_results", analysis_results)
+  output$download_dose_qc_table <- download_table(function() { req(analysis_results()); analysis_results()$dose_response_qc }, "dose_response_qc", analysis_results)
+  output$download_counter_table <- download_table(function() { req(analysis_results()); analysis_results()$counter_assay_qc }, "counter_assay_qc", analysis_results)
+  output$download_hit_table <- download_table(function() { req(analysis_results()); analysis_results()$hit_calls }, "hit_calls", analysis_results)
+  output$download_assay_manifest_table <- download_table(function() { req(analysis_results()); analysis_results()$assay_manifest }, "assay_manifest", analysis_results)
+  output$download_run_documentation_table <- download_table(function() { req(analysis_results()); analysis_results()$run_documentation }, "run_documentation", analysis_results)
+  output$download_final_qc_table <- download_table(function() { req(analysis_results()); analysis_results()$final_qc_table }, "final_qc", analysis_results)
 
   output$download_raw_heatmap <- download_plot(raw_heatmap_obj, "raw_heatmap", active_inputs)
   output$download_norm_heatmap <- download_plot(norm_heatmap_obj, "normalized_heatmap", active_inputs)

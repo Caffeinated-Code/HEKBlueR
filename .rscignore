@@ -1,8 +1,12 @@
 .git
 .gitignore
+.nextflow
 .nextflow*
+.nextflow.log*
 work/
+work
 results/
+results
 *.log
 *.zip
 .Rhistory

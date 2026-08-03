@@ -79,13 +79,73 @@ plate_heatmap_plotly <- function(df, value_col = "raw_od", title = "Plate heatma
     ) |>
       plotly::layout(
         title = list(text = pid, font = list(size = 15)),
-        xaxis = list(title = "Column", tickmode = "array", tickvals = cols, ticktext = sprintf("%02d", cols), side = "bottom", tickfont = list(size = 13), titlefont = list(size = 14)),
-        yaxis = list(title = "Row", tickmode = "array", tickvals = y_order, ticktext = y_order, tickfont = list(size = 13), titlefont = list(size = 14), autorange = "reversed"),
+        xaxis = list(title = "Column", tickmode = "array", tickvals = cols, ticktext = sprintf("%02d", cols), side = "bottom", tickfont = list(size = 13), titlefont = list(size = 14), mirror = "allticks", ticks = "outside", showline = TRUE),
+        yaxis = list(title = "Row", tickmode = "array", tickvals = y_order, ticktext = y_order, tickfont = list(size = 13), titlefont = list(size = 14), autorange = "reversed", mirror = "allticks", ticks = "outside", showline = TRUE),
         margin = list(l = 70, r = 40, t = 55, b = 55)
       )
   })
   plotly::subplot(plots, nrows = length(plots), shareX = FALSE, shareY = FALSE, titleX = TRUE, titleY = TRUE, margin = 0.04) |>
     plotly::layout(title = list(text = title, font = list(size = 18)), showlegend = FALSE)
+}
+
+plate_map_overview_plotly <- function(plate_map) {
+  if (!requireNamespace("plotly", quietly = TRUE)) stop("plotly is required for interactive plate maps")
+  if (is.null(plate_map) || !nrow(plate_map)) return(plotly::plot_ly())
+  df <- plate_map
+  if (!"row" %in% names(df)) df$row <- substr(df$well, 1, 1)
+  if (!"col" %in% names(df)) df$col <- substr(df$well, 2, 3)
+  df$col_int <- as.integer(df$col)
+  rows <- LETTERS[1:8]
+  df$row_factor <- factor(df$row, levels = rows)
+  df$well_group <- ifelse(df$control_type == "test_sample", "treatment", df$control_type)
+  palette <- c(
+    blank = "#f1f5f2",
+    negative_control = "#dce9f7",
+    positive_control = "#ffe8b3",
+    agonist_challenge_control = "#d7f0df",
+    known_antagonist_control = "#f7d6dc",
+    inter_plate_calibrator = "#eadcf8",
+    viability_counter = "#e8f3c7",
+    no_cell_interference = "#eee7df",
+    unrelated_reporter = "#f7e2c6",
+    null_cell_reporter = "#e6e9ef",
+    treatment = "#dce9f7",
+    empty = "#f5f5f5"
+  )
+  df$label <- ifelse(df$control_type == "test_sample", df$peptide_id, gsub("_", " ", df$control_type))
+  df$label <- ifelse(is.na(df$label) | df$label == "", df$sample_id, df$label)
+  df$hover_text <- paste0(
+    "Plate: ", df$plate_id,
+    "<br>Well: ", df$well,
+    "<br>Sample type: ", df$control_type,
+    "<br>Sample: ", df$sample_id,
+    "<br>Peptide/compound: ", df$peptide_id,
+    "<br>Assay mode: ", df$assay_mode,
+    "<br>Concentration uM: ", df$concentration_uM,
+    "<br>Technical replicate: ", df$technical_replicate,
+    "<br>Biological replicate: ", df$biological_replicate
+  )
+  plotly::plot_ly(
+    df,
+    x = ~col_int,
+    y = ~row_factor,
+    split = ~well_group,
+    type = "scatter",
+    mode = "markers+text",
+    text = ~label,
+    hovertext = ~hover_text,
+    hoverinfo = "text",
+    marker = list(symbol = "square", size = 42, line = list(color = "#6f7f89", width = 1.2)),
+    textfont = list(size = 9, color = "#17324d"),
+    colors = palette
+  ) |>
+    plotly::layout(
+      title = list(text = "Plate map by well role", font = list(size = 18)),
+      xaxis = list(title = "Column", tickmode = "array", tickvals = 1:12, ticktext = sprintf("%02d", 1:12), range = c(0.5, 12.5), mirror = "allticks", ticks = "outside", showline = TRUE),
+      yaxis = list(title = "Row", tickmode = "array", tickvals = rows, ticktext = rows, autorange = "reversed", mirror = "allticks", ticks = "outside", showline = TRUE),
+      margin = list(l = 70, r = 40, t = 70, b = 60),
+      legend = list(orientation = "h", x = 0, y = -0.12)
+    )
 }
 
 control_boxplot <- function(df) {
