@@ -256,6 +256,7 @@ thresholds_from_input <- function(input) {
 
 ui <- page_navbar(
   title = "HEKBlueR",
+  id = "main_nav",
   theme = bs_theme(
     version = 5,
     primary = "#0f766e",
@@ -406,6 +407,19 @@ ui <- page_navbar(
   nav_panel(
     "Upload",
     div(class = "section-note", "Upload raw OD data and plate maps first. Use the metadata form when a metadata CSV is not available. Required fields support reproducibility. Optional fields improve search, audit, and troubleshooting later."),
+    card(
+      card_header("Run uploaded data"),
+      tags$ul(
+        tags$li("Required: raw plate-reader CSV."),
+        tags$li("Required for best QC: plate map CSV with well roles, samples, controls, concentrations, and replicates."),
+        tags$li("Metadata CSV is optional when the metadata form is completed.")
+      ),
+      div(class = "download-row",
+        actionButton("run_uploaded_analysis", "Run analysis", class = "btn-success"),
+        actionButton("go_uploaded_preview", "Preview uploaded data", class = "btn-secondary")
+      ),
+      uiOutput("upload_run_status")
+    ),
     tabsetPanel(
       tabPanel(
         "Files",
@@ -713,10 +727,10 @@ server <- function(input, output, session) {
     filter_preview_inputs(get_inputs(), input$preview_assay %||% "All", input$preview_plate %||% "All")
   })
 
-  observeEvent(input$run_analysis, {
+  run_current_analysis <- function() {
     dat <- get_inputs()
     if (is.null(dat)) {
-      showNotification("Load demo data or upload raw files first.", type = "error")
+      showNotification("Load demo data or upload a raw plate-reader CSV first.", type = "error")
       return()
     }
     thresholds <- thresholds_from_input(input)
@@ -775,6 +789,18 @@ server <- function(input, output, session) {
     }
     analysis_results(results)
     active_inputs(dat)
+  }
+
+  observeEvent(input$run_analysis, {
+    run_current_analysis()
+  })
+
+  observeEvent(input$run_uploaded_analysis, {
+    run_current_analysis()
+  })
+
+  observeEvent(input$go_uploaded_preview, {
+    updateNavbarPage(session, "main_nav", selected = "Uploaded Preview")
   })
 
   output$schema_table <- renderDT(status_datatable(schema_table, NULL, 10))
@@ -850,6 +876,23 @@ server <- function(input, output, session) {
       div(class = "metric-card", div(class = "metric-label", "Final actions"), div(class = "action-chips", lapply(unique(final$final_action), function(x) span(class = "action-chip", x)))),
       div(class = "metric-card run-status-wide", div(class = "metric-label", "Assay identifier"), div(class = "id-value", res$assay_manifest$assay_identifier[1])),
       div(class = "metric-card run-status-wide", div(class = "metric-label", "Analysis cache"), div(class = "small-note", analysis_cache$message))
+    )
+  })
+
+  output$upload_run_status <- renderUI({
+    has_raw <- !is_empty_upload(input$raw_file)
+    has_plate_map <- !is_empty_upload(input$plate_map_file)
+    has_metadata <- !is_empty_upload(input$metadata_file)
+    tagList(
+      div(class = "small-note",
+        paste0(
+          "Detected files: raw data ", ifelse(has_raw, "ready", "missing"),
+          "; plate map ", ifelse(has_plate_map, "ready", "missing"),
+          "; metadata ", ifelse(has_metadata, "ready", "using form fields if needed"), "."
+        )
+      ),
+      if (!has_raw) div(class = "small-note", "Upload a raw plate-reader CSV before running analysis."),
+      if (has_raw && !has_plate_map) div(class = "small-note", "Plate map is missing. The app can try raw-file annotations, but design QC is stronger with a plate map.")
     )
   })
 
