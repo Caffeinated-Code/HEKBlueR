@@ -4,7 +4,7 @@ This walkthrough explains what each app step does and why it matters.
 
 ## 1. Demo Or Upload
 
-Use the demo checkboxes to choose a primary screen, secondary screen, counter-assay, or any combination.
+Use the demo checkboxes to choose a primary screen, secondary confirmation screen, counter-assay, or any combination.
 
 For lab data, upload raw well-level plate-reader data. A plate map is recommended. If the raw file already contains well annotations, the app can use those annotations.
 
@@ -20,7 +20,7 @@ The selected thresholds become part of the assay identifier.
 
 This page answers one question: did the app read the files correctly?
 
-Check that plate IDs, wells, assay modes, sample IDs, control labels, concentrations, and metadata look right.
+Use the assay module and plate filters first. Then check that plate IDs, wells, assay stages, assay modes, sample IDs, control labels, concentrations, and metadata look right.
 
 ## 4. EDA
 
@@ -117,7 +117,7 @@ HEKBlueR checks cytotoxicity, no-cell interference, unrelated reporter activity,
 
 ## 13. Final QC And Exports
 
-Final QC collects the main decision table and export buttons.
+Final QC is split into Assay manifest, Run Documentation, Final QC table, and Results Download.
 
 The export package includes:
 
@@ -135,5 +135,17 @@ The export package includes:
 - secondary curve results
 - counter-assay QC
 - final QC table
+- QC report
+- generated figures
 
 These files are intended to be searchable and database-ready.
+
+The ZIP download uses this structure:
+
+```text
+ASSAY_IDENTIFIER_results/
+  qc_report.md
+  documentation/
+  tables/
+  figures/
+```

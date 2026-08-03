@@ -2,7 +2,11 @@
 .gitignore
 .nextflow
 .nextflow*
+.nextflow.log
 .nextflow.log*
+.nextflow.log.*
+^\\.nextflow
+^\\.nextflow\\.log
 work/
 work
 results/

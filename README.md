@@ -7,9 +7,10 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 ## What It Does
 
 - imports raw HEK-Blue plate-reader data
-- lets users choose demo modules: primary agonist, secondary antagonist, counter-assay, or any combination
+- lets users choose demo modules: primary screen, secondary confirmation, counter-assay, or any combination
 - validates plate maps and experimental design
 - previews uploaded raw data, plate maps, and metadata
+- filters Uploaded Preview by assay module and physical plate
 - runs input EDA with raw data and metadata summaries before interpretation
 - keeps analysis logic in reusable R modules separate from the Shiny app
 - reuses cached analysis results when the same files and metadata are submitted again in one app session
@@ -32,7 +33,7 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 - flags likely assay artifacts
 - creates major review plots
 - exports major plots as named PNG files
-- exports database-ready result tables
+- exports database-ready result tables, figures, run documentation, and a QC report
 - runs locally through Shiny or in batch through Nextflow
 
 ## Demo Scope
@@ -40,10 +41,10 @@ It helps biologists upload raw plate-reader data, run automated QC, review prima
 The demo dataset contains:
 
 - 1 target
-- 3 peptides
-- dose-enabled agonist demo plate
-- antagonist dose-response plate
-- counter-assay plate
+- 6 peptides
+- 2 primary screening plates with fixed-dose treatment wells
+- 2 secondary dose-response plates
+- 1 counter-assay plate
 - viability and assay-interference examples
 - one artifact-prone peptide
 
@@ -68,7 +69,28 @@ Rscript scripts/run_pipeline_cli.R \
 ## Run With Nextflow
 
 ```bash
-nextflow run main.nf -profile local --outdir results/nextflow_demo
+nextflow run main.nf -profile local \
+  --samplesheet data/simulated/samplesheet.csv \
+  --outdir results/nextflow_demo
+```
+
+The samplesheet is a CSV with one row per run:
+
+| Column | Meaning |
+|---|---|
+| `run_id` | name used for the output folder |
+| `raw` | path to the raw plate-reader CSV |
+| `plate_map` | path to the plate map CSV |
+| `metadata` | path to the run metadata CSV |
+
+You can also run one dataset without a samplesheet:
+
+```bash
+nextflow run main.nf -profile local \
+  --raw data/simulated/raw_plate_reader.csv \
+  --plate_map data/simulated/plate_map.csv \
+  --metadata data/simulated/run_metadata.csv \
+  --outdir results/nextflow_demo
 ```
 
 AWS Batch profiles are included in `nextflow.config`.
@@ -80,7 +102,7 @@ AWS Batch profiles are included in `nextflow.config`.
 | Demo | load demo data and run analysis |
 | Upload | upload raw data, plate map, and metadata |
 | QC Thresholds | adjust review thresholds before running analysis |
-| Uploaded Preview | inspect uploaded raw data, plate map, and metadata |
+| Uploaded Preview | inspect uploaded raw data, plate map, liquid-handler map, and metadata by assay module and plate |
 | EDA | review input-level exploratory checks |
 | Cleaned Data | inspect cleaning actions, outliers, and cleaned wells |
 | Metadata | review run documentation completeness |
@@ -97,7 +119,19 @@ AWS Batch profiles are included in `nextflow.config`.
 
 ## Output Tables
 
-Each run can export:
+Each run can export individual tables and a structured ZIP package.
+
+The ZIP package contains:
+
+```text
+ASSAY_IDENTIFIER_results/
+  qc_report.md
+  documentation/
+  tables/
+  figures/
+```
+
+Core tables include:
 
 - `metadata.csv`
 - `assay_manifest.csv`

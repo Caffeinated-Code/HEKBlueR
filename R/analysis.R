@@ -362,6 +362,7 @@ validate_design <- function(plate_map, metadata, thresholds = default_qc_thresho
   out <- lapply(names(controls), function(pid) {
     x <- controls[[pid]]
     assay_mode <- unique(x$assay_mode)[1]
+    assay_stage <- if ("assay_stage" %in% names(x)) unique(x$assay_stage)[1] else "unknown"
     required_controls <- switch(
       assay_mode,
       agonist = c("blank", "negative_control", "positive_control"),
@@ -408,7 +409,7 @@ validate_design <- function(plate_map, metadata, thresholds = default_qc_thresho
       flagged_metrics <- c(flagged_metrics, "min_technical_replicates")
       reasons <- c(reasons, paste("technical replicates below", thresholds$design$technical_replicates_pass))
     }
-    dose_response_design <- !is.na(min_doses) && min_doses > 1 && assay_mode %in% c("agonist", "antagonist")
+    dose_response_design <- assay_stage %in% c("secondary", "unknown") && !is.na(min_doses) && min_doses > 1 && assay_mode %in% c("agonist", "antagonist")
     if (dose_response_design && min_doses < thresholds$design$dose_points_pass) {
       status <- ifelse(min_doses < thresholds$design$dose_points_warn, "FAIL", ifelse(status == "FAIL", "FAIL", "WARN"))
       dose_points_status <- ifelse(min_doses < thresholds$design$dose_points_warn, "FAIL", "WARN")
@@ -428,7 +429,7 @@ validate_design <- function(plate_map, metadata, thresholds = default_qc_thresho
       flagged_metrics <- c(flagged_metrics, "min_control_wells")
       reasons <- c(reasons, paste("control wells below preferred count of", thresholds$design$control_wells_pass))
     }
-    if (!ipc_present && assay_mode != "antagonist" && status != "FAIL") {
+    if (!ipc_present && assay_mode != "antagonist" && assay_stage != "counter" && status != "FAIL") {
       status <- "WARN"
       inter_plate_calibrator_status <- "WARN"
       flagged_metrics <- c(flagged_metrics, "inter_plate_calibrator_present")
@@ -436,6 +437,7 @@ validate_design <- function(plate_map, metadata, thresholds = default_qc_thresho
     }
     data.frame(
       plate_id = pid,
+      assay_stage = assay_stage,
       assay_mode = assay_mode,
       design_status = status,
       flagged_metrics = ifelse(length(flagged_metrics), paste(unique(flagged_metrics), collapse = ";"), "0"),
@@ -637,15 +639,17 @@ summarize_primary <- function(normalized, thresholds = default_qc_thresholds()) 
   test <- normalized[normalized$control_type == "test_sample", ]
   if (!nrow(test)) return(data.frame())
   if (!"target_id" %in% names(test)) test$target_id <- NA_character_
+  if (!"assay_stage" %in% names(test)) test$assay_stage <- "unknown"
   if (!"expected_activity" %in% names(test)) {
     test$expected_activity <- ifelse("compound_role" %in% names(test), test$compound_role, ifelse("cpd_role" %in% names(test), test$cpd_role, "unknown"))
   }
   test$expected_activity[is.na(test$expected_activity) | test$expected_activity == ""] <- "unknown"
-  keys <- unique(test[c("plate_id", "assay_mode", "target_id", "peptide_id", "expected_activity", "concentration_uM")])
+  keys <- unique(test[c("plate_id", "assay_stage", "assay_mode", "target_id", "peptide_id", "expected_activity", "concentration_uM")])
   result <- do.call(rbind, lapply(seq_len(nrow(keys)), function(i) {
     key <- keys[i, ]
     x <- test[
-      test$plate_id == key$plate_id &
+        test$plate_id == key$plate_id &
+        test$assay_stage == key$assay_stage &
         test$assay_mode == key$assay_mode &
         test$target_id == key$target_id &
         test$peptide_id == key$peptide_id &
@@ -727,12 +731,15 @@ fit_one_curve <- function(df, response_col) {
 fit_dose_response <- function(primary, thresholds = default_qc_thresholds()) {
   if (!nrow(primary)) return(list(results = data.frame(), qc = data.frame()))
   if (!"target_id" %in% names(primary)) primary$target_id <- NA_character_
-  keys <- unique(primary[c("plate_id", "assay_mode", "target_id", "peptide_id")])
+  if (!"assay_stage" %in% names(primary)) primary$assay_stage <- "unknown"
+  primary <- primary[primary$assay_stage %in% c("secondary", "unknown"), , drop = FALSE]
+  if (!nrow(primary)) return(list(results = data.frame(), qc = data.frame()))
+  keys <- unique(primary[c("plate_id", "assay_stage", "assay_mode", "target_id", "peptide_id")])
   rows <- list()
   qc <- list()
   for (i in seq_len(nrow(keys))) {
     key <- keys[i, ]
-    x <- primary[primary$plate_id == key$plate_id & primary$assay_mode == key$assay_mode & primary$target_id == key$target_id & primary$peptide_id == key$peptide_id, ]
+    x <- primary[primary$plate_id == key$plate_id & primary$assay_stage == key$assay_stage & primary$assay_mode == key$assay_mode & primary$target_id == key$target_id & primary$peptide_id == key$peptide_id, ]
     response_col <- if (key$assay_mode == "antagonist") "inhibition_mean" else "activation_mean"
     fit <- fit_one_curve(x, response_col)
     response <- x[[response_col]]
@@ -747,7 +754,10 @@ fit_dose_response <- function(primary, thresholds = default_qc_thresholds()) {
     } else {
       sum(diff(ordered_response) < -10, na.rm = TRUE)
     }
-    max_rep_cv <- max(x[[paste0(ifelse(key$assay_mode == "antagonist", "inhibition", "activation"), "_cv")]], na.rm = TRUE)
+    response_for_cv <- x[[response_col]]
+    cv_col <- paste0(ifelse(key$assay_mode == "antagonist", "inhibition", "activation"), "_cv")
+    interpretable_points <- is.finite(response_for_cv) & abs(response_for_cv) >= 10
+    max_rep_cv <- max(x[[cv_col]][interpretable_points], na.rm = TRUE)
     if (!is.finite(max_rep_cv)) max_rep_cv <- NA_real_
     if (is.null(fit)) {
       rows[[i]] <- data.frame(key, n_dose_points = n_dose_points, bottom = NA, top = NA, ec50_ic50 = NA, hill = NA, response_min = round(response_min, 4), response_max = round(response_max, 4), dynamic_range = round(dynamic_range, 4), rmse = NA, max_residual = NA, curve_status = "FIT_FAILED")

@@ -6,11 +6,17 @@ Open the app and click **Load demo data**. Click **Run analysis**.
 
 Use **Demo assay modules** to choose which simulated data to load:
 
-- primary agonist
-- secondary antagonist
+- primary screen
+- secondary confirmation
 - counter-assay
 
 This lets you test partial workflows, such as primary-only review or counter-assay-only review.
+
+Assay module and compound direction are separate concepts.
+
+- `assay_stage` tells the app whether the plate is primary, secondary, or counter-assay.
+- `assay_mode` tells the app whether the biology is agonist, antagonist, counter, or unknown direction.
+- `expected_activity` describes the expected compound role: agonist, antagonist, unknown, or artifact.
 
 For your own experiment, upload:
 
@@ -24,6 +30,7 @@ The raw data should include:
 
 - `plate_id`
 - `well`
+- `assay_stage`
 - `assay_mode`
 - `sample_id`
 - `peptide_id`
@@ -34,6 +41,13 @@ The raw data should include:
 The plate map should describe what each well contains.
 
 After upload, open **Uploaded Preview** to confirm that the files look correct before analysis.
+
+Use the two preview filters at the top of the page:
+
+- **Assay module** filters primary, secondary, and counter-assay records.
+- **Plate** filters a single physical plate.
+
+The Raw data, Plate map view, Plate map CSV, Liquid handler map, Metadata, and Expected schema tabs update to match the selected filters.
 
 Open **QC Thresholds** before running analysis if the assay needs thresholds different from the defaults. Each editable threshold shows a recommended range. If any threshold is changed, a rationale note is required. The selected thresholds and rationale are saved with the run and affect the assay identifier.
 
@@ -147,10 +161,18 @@ Use Final QC to export:
 - assay manifest
 - run documentation
 - final QC table
+- QC report
 - normalized results
 - full run package
 
-The export package is designed for later database loading.
+The export package is designed for later database loading and review handoff. The ZIP contains one top-level folder named with the assay identifier plus `_results`.
+
+Inside that folder:
+
+- `qc_report.md` summarizes major WARN and FAIL findings.
+- `documentation/` contains assay manifest, run documentation, metadata, QC thresholds, and run summary JSON.
+- `tables/` contains all analysis tables.
+- `figures/` contains the plots generated for the analysis.
 
 Each run receives a deterministic assay identifier built from target, assay type, peptide IDs, assay date, scientist, and a six-digit change code. The change code is computed from the raw data, plate map, metadata, QC thresholds, threshold-change rationale, and analysis strategy. If any of those inputs change, a new identifier is assigned.
 

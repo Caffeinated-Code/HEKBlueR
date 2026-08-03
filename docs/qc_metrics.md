@@ -95,7 +95,7 @@ Detailed dose-response metrics:
 | `sample_status` | PASS, WARN, or FAIL summary for the sample |
 | `n_doses` | number of tested concentrations |
 | `max_replicate_cv` | highest meaningful replicate CV across dose points |
-| `hit_calls` | primary agonist or antagonist hit call |
+| `hit_calls` | primary fixed-dose hit call using the expected activity direction |
 | `curve_status` | curve QC status for secondary review |
 | `artifact_flags` | counter-assay evidence for cytotoxicity or assay interference |
 | `review_notes` | concise explanation of why the row was flagged |

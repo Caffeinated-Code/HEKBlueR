@@ -5,6 +5,6 @@ account: caffeinated-code
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 17658565
-bundleId: 12359631
+bundleId: 12359925
 url: https://caffeinated-code.shinyapps.io/HEKBlueR/
 version: 1

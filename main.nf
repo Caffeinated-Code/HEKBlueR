@@ -3,6 +3,7 @@ nextflow.enable.dsl = 2
 params.raw = 'data/simulated/raw_plate_reader.csv'
 params.plate_map = 'data/simulated/plate_map.csv'
 params.metadata = 'data/simulated/run_metadata.csv'
+params.samplesheet = ''
 params.outdir = 'results/nextflow_demo'
 
 process VALIDATE_INPUTS {
@@ -10,22 +11,18 @@ process VALIDATE_INPUTS {
   publishDir "${params.outdir}/validation", mode: 'copy'
 
   input:
-  path raw
-  path plate_map
-  path metadata
+  tuple val(run_id), path(raw), path(plate_map), path(metadata)
 
   output:
   path "validated_inputs.txt"
-  path raw, emit: raw_out
-  path plate_map, emit: plate_map_out
-  path metadata, emit: metadata_out
+  tuple val(run_id), path(raw), path(plate_map), path(metadata), emit: validated_files
 
   script:
   """
   test -s ${raw}
   test -s ${plate_map}
   test -s ${metadata}
-  printf "raw=%s\\nplate_map=%s\\nmetadata=%s\\n" "${raw}" "${plate_map}" "${metadata}" > validated_inputs.txt
+  printf "run_id=%s\\nraw=%s\\nplate_map=%s\\nmetadata=%s\\n" "${run_id}" "${raw}" "${plate_map}" "${metadata}" > validated_inputs.txt
   """
 }
 
@@ -37,30 +34,35 @@ process RUN_HEKBLUE_ANALYSIS {
   time '1h'
 
   input:
-  path raw
-  path plate_map
-  path metadata
+  tuple val(run_id), path(raw), path(plate_map), path(metadata)
 
   output:
-  path "analysis_package"
+  path "${run_id}_analysis_package"
 
   script:
   """
-  mkdir -p analysis_package
+  mkdir -p ${run_id}_analysis_package
   export HEKBLUER_HOME="${projectDir}"
   Rscript "${projectDir}/scripts/run_pipeline_cli.R" \\
     --raw ${raw} \\
     --plate-map ${plate_map} \\
     --metadata ${metadata} \\
-    --out analysis_package
+    --out ${run_id}_analysis_package
   """
 }
 
 workflow {
-  raw_ch = Channel.fromPath(params.raw, checkIfExists: true)
-  plate_map_ch = Channel.fromPath(params.plate_map, checkIfExists: true)
-  metadata_ch = Channel.fromPath(params.metadata, checkIfExists: true)
+  if (params.samplesheet && params.samplesheet.toString().trim()) {
+    input_ch = Channel
+      .fromPath(params.samplesheet, checkIfExists: true)
+      .splitCsv(header: false)
+      .map { row -> row.collect { it == null ? null : it.toString().replaceAll('"', '').trim() } }
+      .filter { row -> row[0] != 'run_id' }
+      .map { row -> tuple(row[0] ?: 'hekblue_run', file(row[1]), file(row[2]), file(row[3])) }
+  } else {
+    input_ch = Channel.of(tuple('hekblue_run', file(params.raw), file(params.plate_map), file(params.metadata)))
+  }
 
-  validated = VALIDATE_INPUTS(raw_ch, plate_map_ch, metadata_ch)
-  RUN_HEKBLUE_ANALYSIS(validated.raw_out, validated.plate_map_out, validated.metadata_out)
+  validated = VALIDATE_INPUTS(input_ch)
+  RUN_HEKBLUE_ANALYSIS(validated.validated_files)
 }

@@ -8,7 +8,8 @@
 | `well` | well coordinate, such as A01 |
 | `row` | plate row |
 | `col` | plate column |
-| `assay_mode` | agonist, antagonist, or counter |
+| `assay_stage` | primary, secondary, or counter |
+| `assay_mode` | agonist, antagonist, counter, or unknown direction |
 | `sample_id` | sample or control name |
 | `peptide_id` | peptide identifier |
 | `control_type` | well role |

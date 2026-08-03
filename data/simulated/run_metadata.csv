@@ -4,10 +4,14 @@
 "assay_date","2026-07-31",TRUE
 "target_id","TARGET_TLR8_DEMO",TRUE
 "cell_line","HEK-Blue TLR8 demo cells",TRUE
-"cell_passage","P18",FALSE
-"cell_lot","CELL-DEMO-01",FALSE
-"quanti_blue_lot","QB-DEMO-07",FALSE
-"instrument","Demo plate reader",FALSE
-"protocol_version","v1.0",TRUE
+"protocol_version","v1.1",TRUE
 "incubation_hours","18",TRUE
 "readout_nm","655",TRUE
+"cell_passage","P18",FALSE
+"cell_lot","CELL-DEMO-02",FALSE
+"quanti_blue_lot","QB-DEMO-08",FALSE
+"instrument","Demo plate reader",FALSE
+"peptide_lot","mixed demo lots",FALSE
+"vehicle","0.1% DMSO",FALSE
+"reader_settings","endpoint OD 655 nm",FALSE
+"notes","Simulated multi-plate demo with primary, secondary, and counter-assay modules.",FALSE

@@ -13,7 +13,7 @@ source("R/analysis.R")
 source("R/plots.R")
 source("R/simulate_data.R")
 
-APP_VERSION <- "0.7.0"
+APP_VERSION <- "0.8.0"
 
 metric_help <- list(
   "Z-prime" = "Z-prime measures separation between positive and negative controls. Values above 0.5 are preferred. Values from 0.3 to 0.5 need review. Lower values usually mean the assay window is weak.",
@@ -47,6 +47,24 @@ is_empty_upload <- function(file_input) {
 
 read_uploaded_csv <- function(file_input, demo_path) {
   if (is_empty_upload(file_input)) read.csv(demo_path, stringsAsFactors = FALSE) else read.csv(file_input$datapath[1], stringsAsFactors = FALSE)
+}
+
+assay_filter_col <- function(df) {
+  if ("assay_stage" %in% names(df)) "assay_stage" else "assay_mode"
+}
+
+filter_preview_inputs <- function(dat, assay = "All", plate = "All") {
+  if (is.null(dat)) return(NULL)
+  raw <- dat$raw_data
+  plate_map <- dat$plate_map
+  filter_one <- function(df) {
+    if (is.null(df) || !nrow(df)) return(df)
+    ac <- assay_filter_col(df)
+    if (!is.null(assay) && assay != "All" && ac %in% names(df)) df <- df[df[[ac]] == assay, , drop = FALSE]
+    if (!is.null(plate) && plate != "All" && "plate_id" %in% names(df)) df <- df[df$plate_id == plate, , drop = FALSE]
+    df
+  }
+  list(raw_data = filter_one(raw), plate_map = filter_one(plate_map), metadata = dat$metadata)
 }
 
 status_badge <- function(status) {
@@ -137,10 +155,10 @@ liquid_handler_plate_map <- function(plate_map) {
   if (!"sample_id" %in% names(out)) out$sample_id <- ""
   if (!"peptide_id" %in% names(out)) out$peptide_id <- ""
   if (!"concentration_uM" %in% names(out)) out$concentration_uM <- NA_real_
-  wanted <- c("plate_id", "well", "row", "col", "assay_mode", "control_type", "sample_id", "peptide_id", "concentration_uM", "technical_replicate", "biological_replicate")
+  wanted <- c("plate_id", "well", "row", "col", "assay_stage", "assay_mode", "control_type", "sample_id", "peptide_id", "concentration_uM", "technical_replicate", "biological_replicate")
   for (nm in setdiff(wanted, names(out))) out[[nm]] <- NA
   out <- out[wanted]
-  names(out) <- c("destination_plate", "destination_well", "destination_row", "destination_column", "assay_mode", "sample_type", "sample_id", "compound_id", "concentration_uM", "technical_replicate", "biological_replicate")
+  names(out) <- c("destination_plate", "destination_well", "destination_row", "destination_column", "assay_stage", "assay_mode", "sample_type", "sample_id", "compound_id", "concentration_uM", "technical_replicate", "biological_replicate")
   out$transfer_volume_uL <- NA_real_
   out$source_plate <- ""
   out$source_well <- ""
@@ -149,9 +167,9 @@ liquid_handler_plate_map <- function(plate_map) {
 }
 
 schema_table <- data.frame(
-  Column = c("plate_id", "well", "assay_mode", "sample_id", "peptide_id", "control_type", "concentration_uM", "raw_od", "technical_replicate", "biological_replicate", "expected_activity"),
-  Requirement = c("Required", "Required", "Required", "Required", "Required for samples", "Required", "Required for test samples", "Required", "Recommended", "Recommended", "Optional"),
-  Meaning = c("Unique plate identifier", "Well coordinate such as A01", "agonist, antagonist, counter, or unknown", "Sample or control label", "Peptide or compound identifier", "Well role", "Peptide or compound dose in uM", "Raw optical density", "Technical replicate number", "Biological replicate number", "Expected compound role: agonist, antagonist, or unknown"),
+  Column = c("plate_id", "well", "assay_stage", "assay_mode", "sample_id", "peptide_id", "control_type", "concentration_uM", "raw_od", "technical_replicate", "biological_replicate", "expected_activity"),
+  Requirement = c("Required", "Required", "Recommended", "Required", "Required", "Required for samples", "Required", "Required for test samples", "Required", "Recommended", "Recommended", "Optional"),
+  Meaning = c("Unique plate identifier", "Well coordinate such as A01", "primary, secondary, or counter", "agonist, antagonist, counter, or unknown direction", "Sample or control label", "Peptide or compound identifier", "Well role", "Peptide or compound dose in uM", "Raw optical density", "Technical replicate number", "Biological replicate number", "Expected compound role: agonist, antagonist, unknown, or artifact"),
   stringsAsFactors = FALSE
 )
 
@@ -279,6 +297,12 @@ ui <- page_navbar(
     .page-search-hit { outline: 2px solid color-mix(in srgb, var(--brand) 45%, transparent); outline-offset: 2px; }
     .page-search-dim { opacity: 0.38; }
     .download-row { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .run-status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
+    .run-status-grid .metric-card { min-height: 88px; }
+    .run-status-wide { grid-column: 1 / -1; }
+    .id-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.88rem; line-height: 1.35; overflow-wrap: anywhere; word-break: break-word; color: var(--brand-dark); }
+    .action-chips { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.35rem; }
+    .action-chip { border: 1px solid var(--line); background: var(--bg-soft); color: var(--text); border-radius: 999px; padding: 0.18rem 0.55rem; font-size: 0.74rem; font-weight: 800; }
     .btn { border-radius: 999px; font-weight: 760; }
     .btn-default, .btn-secondary { border-color: var(--line); background: var(--surface); color: var(--text); }
     .plot-card { overflow: visible; }
@@ -353,8 +377,8 @@ ui <- page_navbar(
         checkboxGroupInput(
           "demo_modes",
           "Demo assay modules",
-          choices = c("Primary agonist" = "agonist", "Secondary antagonist" = "antagonist", "Counter-assay" = "counter"),
-          selected = c("agonist", "antagonist", "counter"),
+          choices = c("Primary screen" = "primary", "Secondary confirmation" = "secondary", "Counter-assay" = "counter"),
+          selected = c("primary", "secondary", "counter"),
           inline = TRUE
         ),
         actionButton("load_demo", "Load demo data", class = "btn-primary"),
@@ -371,7 +395,8 @@ ui <- page_navbar(
             downloadButton("download_demo_plate_map", "Plate map CSV"),
             downloadButton("download_demo_metadata", "Metadata CSV"),
             downloadButton("download_demo_peptides", "Peptide metadata CSV"),
-            downloadButton("download_demo_target", "Target metadata CSV")
+            downloadButton("download_demo_target", "Target metadata CSV"),
+            downloadButton("download_demo_samplesheet", "Nextflow samplesheet CSV")
           )
         ),
         card(card_header("Run status"), uiOutput("run_status"))
@@ -493,6 +518,7 @@ ui <- page_navbar(
   nav_panel(
     "Uploaded Preview",
     div(class = "section-note", "Confirm the uploaded files before running QC or interpreting results."),
+    uiOutput("preview_filter_controls"),
     tabsetPanel(
       tabPanel("Raw data", card(card_header("Raw data preview"), DTOutput("raw_preview"), div(class = "download-row", downloadButton("download_raw_preview", "Download raw preview")))),
       tabPanel("Plate map view", card(class = "plot-card plot-map", card_header("Plate map visualization"), plotlyOutput("plate_map_overview", height = "680px"))),
@@ -615,10 +641,15 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Final QC",
-    card(card_header("Assay manifest"), DTOutput("assay_manifest_table"), div(class = "download-row", downloadButton("download_assay_manifest_table", "Download assay manifest"))),
-    card(card_header("Run documentation"), DTOutput("run_documentation_table"), div(class = "download-row", downloadButton("download_run_documentation_table", "Download run documentation"))),
-    card(card_header("Final QC table"), DTOutput("final_qc_table"), div(class = "download-row", downloadButton("download_final_qc_table", "Download final QC"))),
-    card(card_header("Export"), div(class = "download-row", downloadButton("download_final_qc", "Final QC CSV"), downloadButton("download_normalized", "Normalized results CSV"), downloadButton("download_package", "Run package ZIP")))
+    tabsetPanel(
+      tabPanel("Assay manifest", card(card_header("Assay manifest"), DTOutput("assay_manifest_table"), div(class = "download-row", downloadButton("download_assay_manifest_table", "Download assay manifest")))),
+      tabPanel("Run Documentation", card(card_header("Run documentation"), DTOutput("run_documentation_table"), div(class = "download-row", downloadButton("download_run_documentation_table", "Download run documentation")))),
+      tabPanel("Final QC table", card(card_header("Final QC table"), DTOutput("final_qc_table"), div(class = "download-row", downloadButton("download_final_qc_table", "Download final QC")))),
+      tabPanel("Results Download",
+        card(card_header("QC report preview"), verbatimTextOutput("qc_report_preview")),
+        card(card_header("Export"), div(class = "download-row", downloadButton("download_final_qc", "Final QC CSV"), downloadButton("download_normalized", "Normalized results CSV"), downloadButton("download_qc_report", "QC report MD"), downloadButton("download_package", "Run package ZIP")))
+      )
+    )
   )
 )
 
@@ -666,13 +697,19 @@ server <- function(input, output, session) {
     } else {
       metadata_from_form()
     }
-    if (demo_loaded() && is.null(input$raw_file)) {
-      selected_modes <- input$demo_modes %||% c("agonist", "antagonist", "counter")
-      validate(need(length(selected_modes) > 0, "Choose at least one demo assay module."))
-      raw_data <- raw_data[raw_data$assay_mode %in% selected_modes, , drop = FALSE]
-      plate_map <- plate_map[plate_map$assay_mode %in% selected_modes, , drop = FALSE]
+    if (demo_loaded() && is_empty_upload(input$raw_file)) {
+      selected_modules <- input$demo_modes %||% c("primary", "secondary", "counter")
+      validate(need(length(selected_modules) > 0, "Choose at least one demo assay module."))
+      raw_col <- assay_filter_col(raw_data)
+      map_col <- assay_filter_col(plate_map)
+      raw_data <- raw_data[raw_data[[raw_col]] %in% selected_modules, , drop = FALSE]
+      plate_map <- plate_map[plate_map[[map_col]] %in% selected_modules, , drop = FALSE]
     }
     list(raw_data = raw_data, plate_map = plate_map, metadata = metadata)
+  })
+
+  preview_data <- reactive({
+    filter_preview_inputs(get_inputs(), input$preview_assay %||% "All", input$preview_plate %||% "All")
   })
 
   observeEvent(input$run_analysis, {
@@ -742,17 +779,48 @@ server <- function(input, output, session) {
   output$schema_table <- renderDT(status_datatable(schema_table, NULL, 10))
   output$schema_table_preview <- renderDT(status_datatable(schema_table, NULL, 10))
 
+  output$preview_filter_controls <- renderUI({
+    dat <- get_inputs()
+    if (is.null(dat)) {
+      return(card(class = "upload-compact", card_header("Preview filters"), p(class = "small-note", "Load demo data or upload files to filter by assay module and plate.")))
+    }
+    assay_col <- assay_filter_col(dat$raw_data)
+    assay_choices <- c("All", sort(unique(dat$raw_data[[assay_col]])))
+    plate_source <- dat$raw_data
+    if (!is.null(input$preview_assay) && input$preview_assay != "All") {
+      plate_source <- plate_source[plate_source[[assay_col]] == input$preview_assay, , drop = FALSE]
+    }
+    plate_choices <- c("All", sort(unique(plate_source$plate_id)))
+    layout_columns(
+      class = "upload-compact",
+      col_widths = c(6, 6),
+      card(card_header("Assay module"), selectInput("preview_assay", NULL, choices = assay_choices, selected = input$preview_assay %||% "All", selectize = FALSE)),
+      card(card_header("Plate"), selectInput("preview_plate", NULL, choices = plate_choices, selected = ifelse((input$preview_plate %||% "All") %in% plate_choices, input$preview_plate %||% "All", "All"), selectize = FALSE))
+    )
+  })
+
+  observe({
+    dat <- get_inputs()
+    req(dat)
+    assay_col <- assay_filter_col(dat$raw_data)
+    plate_source <- dat$raw_data
+    if (!is.null(input$preview_assay) && input$preview_assay != "All") {
+      plate_source <- plate_source[plate_source[[assay_col]] == input$preview_assay, , drop = FALSE]
+    }
+    choices <- c("All", sort(unique(plate_source$plate_id)))
+    selected <- if (!is.null(input$preview_plate) && input$preview_plate %in% choices) input$preview_plate else "All"
+    updateSelectInput(session, "preview_plate", choices = choices, selected = selected)
+  })
+
   output$run_status <- renderUI({
     res <- analysis_results()
     if (is.null(res)) return(tagList(status_badge("NOT RUN"), p(class = "small-note", paste("Version", APP_VERSION))))
     final <- res$final_qc_table
-    tagList(
-      layout_columns(
-        div(class = "metric-card", div(class = "metric-label", "Peptides reviewed"), div(class = "metric-value", nrow(final))),
-        div(class = "metric-card", div(class = "metric-label", "Final actions"), div(class = "small-note", paste(unique(final$final_action), collapse = ", "))),
-        div(class = "metric-card", div(class = "metric-label", "Assay identifier"), div(class = "metric-value", res$assay_manifest$assay_identifier[1])),
-        div(class = "metric-card", div(class = "metric-label", "Analysis cache"), div(class = "small-note", analysis_cache$message))
-      )
+    div(class = "run-status-grid",
+      div(class = "metric-card", div(class = "metric-label", "Peptides reviewed"), div(class = "metric-value", nrow(final))),
+      div(class = "metric-card", div(class = "metric-label", "Final actions"), div(class = "action-chips", lapply(unique(final$final_action), function(x) span(class = "action-chip", x)))),
+      div(class = "metric-card run-status-wide", div(class = "metric-label", "Assay identifier"), div(class = "id-value", res$assay_manifest$assay_identifier[1])),
+      div(class = "metric-card run-status-wide", div(class = "metric-label", "Analysis cache"), div(class = "small-note", analysis_cache$message))
     )
   })
 
@@ -777,9 +845,9 @@ server <- function(input, output, session) {
     div(class = "metric-card", div(class = "metric-label", "Optional fields"), div(class = "metric-value", paste0(meta$optional_percent, "%")), status_badge(ifelse(meta$optional_percent >= 80, "PASS", ifelse(meta$optional_percent >= 40, "WARN", "FAIL"))), div(class = "small-note", paste(meta$optional_complete, "of", meta$optional_total, "complete")))
   })
 
-  output$raw_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload raw data."))); status_datatable(head(dat$raw_data, 200), NULL, 12) })
-  output$plate_map_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload a plate map."))); status_datatable(head(dat$plate_map, 200), NULL, 12) })
-  output$liquid_handler_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload a plate map."))); status_datatable(head(liquid_handler_plate_map(dat$plate_map), 200), NULL, 12) })
+  output$raw_preview <- renderDT({ dat <- preview_data(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload raw data."))); status_datatable(head(dat$raw_data, 300), NULL, 12) })
+  output$plate_map_preview <- renderDT({ dat <- preview_data(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload a plate map."))); status_datatable(head(dat$plate_map, 300), NULL, 12) })
+  output$liquid_handler_preview <- renderDT({ dat <- preview_data(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or upload a plate map."))); status_datatable(head(liquid_handler_plate_map(dat$plate_map), 300), NULL, 12) })
   output$metadata_preview <- renderDT({ dat <- get_inputs(); if (is.null(dat)) return(datatable(data.frame(Message = "Load demo data or enter metadata."))); status_datatable(dat$metadata, NULL, 15) })
   output$metadata_table <- renderDT({ req(active_inputs()); status_datatable(active_inputs()$metadata, NULL, 15) })
   output$required_metadata_table <- renderDT({
@@ -845,6 +913,7 @@ server <- function(input, output, session) {
   output$assay_manifest_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$assay_manifest, NULL, 5) })
   output$run_documentation_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$run_documentation, NULL, 20) })
   output$final_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$final_qc_table, "final_status", 20) })
+  output$qc_report_preview <- renderText({ req(analysis_results()); paste(qc_report_lines(analysis_results()), collapse = "\n") })
 
   raw_heatmap_obj <- reactive({ req(analysis_results()); plate_heatmap_plot(analysis_results()$cleaned_well_data, "raw_od", "Raw OD by well") })
   norm_heatmap_obj <- reactive({ req(analysis_results()); plate_heatmap_plot(analysis_results()$normalized_results, "percent_activation", "Percent activation by well") })
@@ -859,7 +928,7 @@ server <- function(input, output, session) {
   replicate_cv_obj <- reactive({ req(analysis_results()); replicate_cv_plot(analysis_results()$primary_results) })
   calibration_plot_obj <- reactive({ req(analysis_results()); calibration_plot(analysis_results()$interplate_calibration) })
 
-  output$plate_map_overview <- renderPlotly({ dat <- get_inputs(); req(dat); plate_map_overview_plotly(dat$plate_map) })
+  output$plate_map_overview <- renderPlotly({ dat <- preview_data(); req(dat); plate_map_overview_plotly(dat$plate_map) })
   output$raw_heatmap <- renderPlotly(raw_heatmap_interactive_obj())
   output$normalized_heatmap <- renderPlotly(norm_heatmap_interactive_obj())
   output$qc_plot <- renderPlotly(plotly::layout(ggplotly(qc_plot_obj()), margin = list(l = 120, r = 30, t = 60, b = 50)))
@@ -876,20 +945,21 @@ server <- function(input, output, session) {
     req(analysis_results())
     cols <- names(analysis_results()$normalized_results)
     tagList(
-      selectInput("custom_x", "X", choices = cols, selected = "concentration_uM"),
-      selectInput("custom_y", "Y", choices = cols, selected = "percent_activation"),
-      selectInput("custom_color", "Color", choices = cols, selected = "peptide_id"),
-      selectInput("custom_facet", "Facet", choices = c("None", cols), selected = "assay_mode")
+      selectInput("custom_x", "X", choices = cols, selected = "concentration_uM", selectize = FALSE),
+      selectInput("custom_y", "Y", choices = cols, selected = "percent_activation", selectize = FALSE),
+      selectInput("custom_color", "Color", choices = cols, selected = "peptide_id", selectize = FALSE),
+      selectInput("custom_facet", "Facet", choices = c("None", cols), selected = "assay_mode", selectize = FALSE),
+      actionButton("generate_custom_plot", "Generate plot", class = "btn-primary")
     )
   })
 
-  custom_plot_obj <- reactive({
+  custom_plot_obj <- eventReactive(input$generate_custom_plot, {
     req(analysis_results(), input$custom_x, input$custom_y, input$custom_color)
     df <- analysis_results()$normalized_results
     p <- ggplot(df, aes(x = .data[[input$custom_x]], y = .data[[input$custom_y]], color = .data[[input$custom_color]])) + geom_point(alpha = 0.82, size = 2) + hek_theme()
     if (!is.null(input$custom_facet) && input$custom_facet != "None") p <- p + facet_wrap(stats::as.formula(paste("~", input$custom_facet)))
     p
-  })
+  }, ignoreNULL = FALSE)
   output$custom_plot <- renderPlotly(ggplotly(custom_plot_obj()))
 
   output$download_demo_raw <- downloadHandler(filename = function() "hekblue_demo_raw_plate_reader.csv", content = function(file) file.copy("data/simulated/raw_plate_reader.csv", file))
@@ -897,11 +967,12 @@ server <- function(input, output, session) {
   output$download_demo_metadata <- downloadHandler(filename = function() "hekblue_demo_run_metadata.csv", content = function(file) file.copy("data/simulated/run_metadata.csv", file))
   output$download_demo_peptides <- downloadHandler(filename = function() "hekblue_demo_peptide_metadata.csv", content = function(file) file.copy("data/simulated/peptide_metadata.csv", file))
   output$download_demo_target <- downloadHandler(filename = function() "hekblue_demo_target_metadata.csv", content = function(file) file.copy("data/simulated/target_metadata.csv", file))
+  output$download_demo_samplesheet <- downloadHandler(filename = function() "hekblue_demo_nextflow_samplesheet.csv", content = function(file) file.copy("data/simulated/samplesheet.csv", file))
 
-  output$download_raw_preview <- download_table(function() { req(get_inputs()); get_inputs()$raw_data }, "raw_preview")
-  output$download_plate_map_preview <- download_table(function() { req(get_inputs()); get_inputs()$plate_map }, "plate_map")
-  output$download_liquid_handler_map <- download_table(function() { req(get_inputs()); liquid_handler_plate_map(get_inputs()$plate_map) }, "liquid_handler_plate_map")
-  output$download_metadata_preview <- download_table(function() { req(get_inputs()); get_inputs()$metadata }, "metadata")
+  output$download_raw_preview <- download_table(function() { req(preview_data()); preview_data()$raw_data }, "raw_preview")
+  output$download_plate_map_preview <- download_table(function() { req(preview_data()); preview_data()$plate_map }, "plate_map")
+  output$download_liquid_handler_map <- download_table(function() { req(preview_data()); liquid_handler_plate_map(preview_data()$plate_map) }, "liquid_handler_plate_map")
+  output$download_metadata_preview <- download_table(function() { req(preview_data()); preview_data()$metadata }, "metadata")
   output$download_schema_preview <- download_table(function() schema_table, "expected_schema")
   output$download_design_qc_table <- download_table(function() { req(analysis_results()); analysis_results()$design_qc }, "design_qc", analysis_results)
   output$download_plate_qc_table <- download_table(function() { req(analysis_results()); analysis_results()$plate_qc }, "plate_qc", analysis_results)
@@ -965,15 +1036,16 @@ server <- function(input, output, session) {
 
   output$download_final_qc <- downloadHandler(filename = function() paste0(analysis_results()$assay_manifest$assay_identifier[1], "_final_qc_table.csv"), content = function(file) write.csv(analysis_results()$final_qc_table, file, row.names = FALSE))
   output$download_normalized <- downloadHandler(filename = function() paste0(analysis_results()$assay_manifest$assay_identifier[1], "_normalized_results.csv"), content = function(file) write.csv(analysis_results()$normalized_results, file, row.names = FALSE))
+  output$download_qc_report <- downloadHandler(filename = function() paste0(analysis_results()$assay_manifest$assay_identifier[1], "_qc_report.md"), content = function(file) writeLines(qc_report_lines(analysis_results()), file))
   output$download_package <- downloadHandler(
-    filename = function() paste0(analysis_results()$assay_manifest$assay_identifier[1], "_hekblue_run_package_", format(Sys.Date(), "%Y%m%d"), ".zip"),
+    filename = function() paste0(analysis_results()$assay_manifest$assay_identifier[1], "_results.zip"),
     content = function(file) {
       dat <- active_inputs()
       tmp <- tempfile("hekblue_export_")
-      export_hekblue_results(analysis_results(), dat$raw_data, dat$plate_map, dat$metadata, tmp)
+      result_dir <- export_hekblue_results_structured(analysis_results(), dat$raw_data, dat$plate_map, dat$metadata, tmp)
       old <- setwd(dirname(tmp))
       on.exit(setwd(old), add = TRUE)
-      export_files <- list.files(basename(tmp), recursive = TRUE, full.names = TRUE)
+      export_files <- list.files(file.path(basename(tmp), basename(result_dir)), recursive = TRUE, full.names = TRUE)
       utils::zip(file, files = export_files)
     }
   )

@@ -29,6 +29,16 @@ The project has three layers.
 9. Flag artifacts and design issues.
 10. Export database-ready results.
 
+## Assay Stages And Modes
+
+HEKBlueR separates workflow stage from expected biological direction.
+
+| Field | Values | Meaning |
+|---|---|---|
+| `assay_stage` | primary, secondary, counter | where the plate sits in the screening workflow |
+| `assay_mode` | agonist, antagonist, counter, unknown | how the assay response should be normalized |
+| `expected_activity` | agonist, antagonist, unknown, artifact | expected compound role used for interpretation checks |
+
 ## Assay Modes
 
 ### Agonist
@@ -107,26 +117,36 @@ The Shiny app can run locally first. For scale:
 
 ## Output Package
 
-Each run exports:
+Each app ZIP export uses an assay-specific results folder:
 
 ```text
-metadata.json
-analysis_config.yml
-raw_data.csv
-plate_map.csv
-cleaned_well_data.csv
-normalized_results.csv
-design_qc.csv
-plate_qc.csv
-control_qc.csv
-replicate_qc.csv
-dose_response_results.csv
-dose_response_qc.csv
-counter_assay_qc.csv
-hit_calls.csv
-exclusions.csv
-final_qc_table.csv
-report.html
-plots/
+ASSAY_IDENTIFIER_results/
+  qc_report.md
+  documentation/
+    assay_manifest.csv
+    run_documentation.csv
+    metadata.csv
+    qc_thresholds.csv
+    run_summary.json
+    analysis_config.yml
+  tables/
+    raw_data.csv
+    plate_map.csv
+    cleaned_well_data.csv
+    normalized_results.csv
+    design_qc.csv
+    plate_qc.csv
+    intraplate_variability_qc.csv
+    dose_response_results.csv
+    dose_response_qc.csv
+    counter_assay_qc.csv
+    hit_calls.csv
+    exclusions.csv
+    final_qc_table.csv
+  figures/
+    raw_od_heatmap.png
+    normalized_heatmap.png
+    zprime_qc.png
+    dose_response.png
+    replicate_cv.png
 ```
-

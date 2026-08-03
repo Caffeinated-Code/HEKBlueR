@@ -1,4 +1,7 @@
-"peptide_id","peptide_name","expected_role","lot","purity_percent"
-"PEP-001","Demo agonist-like peptide","agonist","P001-A",95
-"PEP-002","Demo antagonist-like peptide","antagonist","P002-A",93
-"PEP-003","Demo artifact-prone peptide","artifact","P003-A",88
+"peptide_id","peptide_name","expected_activity","lot","purity_percent","molecular_weight_da","stock_concentration_mM"
+"PEP-001","strong agonist-like peptide","agonist","P001-B",96.2,1820,10
+"PEP-002","antagonist-like peptide","antagonist","P002-B",94.1,1765,10
+"PEP-003","artifact-prone peptide","artifact","P003-B",88.4,1944,8
+"PEP-004","inactive peptide","unknown","P004-A",97.8,1688,10
+"PEP-005","weak mixed-response peptide","unknown","P005-A",91.6,2015,5
+"PEP-006","unknown-direction peptide","unknown","P006-A",93.2,1875,10

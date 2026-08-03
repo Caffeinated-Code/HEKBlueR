@@ -1,0 +1,2 @@
+run_id,raw,plate_map,metadata
+demo_multi_plate,data/simulated/raw_plate_reader.csv,data/simulated/plate_map.csv,data/simulated/run_metadata.csv
