@@ -310,10 +310,10 @@ ui <- page_navbar(
     .plot-card .html-widget, .plot-card .shiny-plot-output, .plot-card .js-plotly-plot { width: 100% !important; min-height: 460px !important; height: 460px !important; }
     .plot-card.plot-tall .card-body { min-height: 720px; }
     .plot-card.plot-tall .html-widget, .plot-card.plot-tall .shiny-plot-output, .plot-card.plot-tall .js-plotly-plot { min-height: 700px !important; height: 700px !important; }
-    .plot-card.plot-plate .card-body { min-height: 780px; }
-    .plot-card.plot-plate .html-widget, .plot-card.plot-plate .shiny-plot-output, .plot-card.plot-plate .js-plotly-plot { min-height: 760px !important; height: 760px !important; }
-    .plot-card.plot-map .card-body { min-height: 700px; }
-    .plot-card.plot-map .html-widget, .plot-card.plot-map .shiny-plot-output, .plot-card.plot-map .js-plotly-plot { min-height: 680px !important; height: 680px !important; }
+    .plot-card.plot-plate .card-body { min-height: 560px; }
+    .plot-card.plot-plate .html-widget, .plot-card.plot-plate .shiny-plot-output, .plot-card.plot-plate .js-plotly-plot { min-height: 540px !important; height: 540px !important; }
+    .plot-card.plot-map .card-body { min-height: 560px; }
+    .plot-card.plot-map .html-widget, .plot-card.plot-map .shiny-plot-output, .plot-card.plot-map .js-plotly-plot { min-height: 540px !important; height: 540px !important; }
     .demo-side { display: grid; gap: 1rem; align-content: start; }
     .demo-side .download-row .btn { margin-bottom: 0.25rem; }
     .plot-card.plot-wide .card-body { min-height: 560px; }
@@ -521,7 +521,7 @@ ui <- page_navbar(
     uiOutput("preview_filter_controls"),
     tabsetPanel(
       tabPanel("Raw data", card(card_header("Raw data preview"), DTOutput("raw_preview"), div(class = "download-row", downloadButton("download_raw_preview", "Download raw preview")))),
-      tabPanel("Plate map view", card(class = "plot-card plot-map", card_header("Plate map visualization"), plotlyOutput("plate_map_overview", height = "680px"))),
+      tabPanel("Plate map view", card(class = "plot-card plot-map", card_header("Plate map visualization"), plotlyOutput("plate_map_overview", height = "540px"))),
       tabPanel("Plate map CSV", card(card_header("Plate map table"), DTOutput("plate_map_preview"), div(class = "download-row", downloadButton("download_plate_map_preview", "Download plate map")))),
       tabPanel("Liquid handler map", card(card_header("Liquid handler-ready map"), DTOutput("liquid_handler_preview"), div(class = "download-row", downloadButton("download_liquid_handler_map", "Download liquid handler map")))),
       tabPanel("Metadata", card(card_header("Metadata preview"), DTOutput("metadata_preview"), div(class = "download-row", downloadButton("download_metadata_preview", "Download metadata")))),
@@ -585,9 +585,10 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Plate Layout",
+    uiOutput("plate_layout_controls"),
     tabsetPanel(
-      tabPanel("Raw OD", card(class = "plot-card plot-plate", card_header("Raw OD heatmap"), plotlyOutput("raw_heatmap", height = "760px"), div(class = "download-row", downloadButton("download_raw_heatmap", "Download raw heatmap")))),
-      tabPanel("Normalized", card(class = "plot-card plot-plate", card_header("Normalized heatmap"), plotlyOutput("normalized_heatmap", height = "760px"), div(class = "download-row", downloadButton("download_norm_heatmap", "Download normalized heatmap"))))
+      tabPanel("Raw OD", card(class = "plot-card plot-plate", card_header("Raw OD heatmap"), plotlyOutput("raw_heatmap", height = "540px"), div(class = "download-row", downloadButton("download_raw_heatmap", "Download raw heatmap")))),
+      tabPanel("Normalized", card(class = "plot-card plot-plate", card_header("Normalized heatmap"), plotlyOutput("normalized_heatmap", height = "540px"), div(class = "download-row", downloadButton("download_norm_heatmap", "Download normalized heatmap"))))
     )
   ),
   nav_panel(
@@ -812,6 +813,34 @@ server <- function(input, output, session) {
     updateSelectInput(session, "preview_plate", choices = choices, selected = selected)
   })
 
+  output$plate_layout_controls <- renderUI({
+    res <- analysis_results()
+    if (is.null(res)) {
+      return(card(class = "upload-compact", card_header("Plate"), p(class = "small-note", "Run analysis to inspect plate layouts.")))
+    }
+    input_order <- if (!is.null(active_inputs())) unique(active_inputs()$raw_data$plate_id) else character()
+    plate_choices <- unique(c(input_order, res$cleaned_well_data$plate_id))
+    selected <- input$layout_plate %||% plate_choices[1]
+    if (!selected %in% plate_choices) selected <- plate_choices[1]
+    layout_columns(
+      class = "upload-compact",
+      col_widths = c(5, 7),
+      card(card_header("Plate"), selectInput("layout_plate", NULL, choices = plate_choices, selected = selected, selectize = FALSE)),
+      card(card_header("View"), p(class = "small-note", "One plate is shown at a time. Hover over any well for sample, control, concentration, replicate, and response details."))
+    )
+  })
+
+  selected_layout_data <- reactive({
+    req(analysis_results())
+    input_order <- if (!is.null(active_inputs())) unique(active_inputs()$raw_data$plate_id) else character()
+    plate_choices <- unique(c(input_order, analysis_results()$cleaned_well_data$plate_id))
+    selected <- input$layout_plate %||% plate_choices[1]
+    list(
+      cleaned = analysis_results()$cleaned_well_data[analysis_results()$cleaned_well_data$plate_id == selected, , drop = FALSE],
+      normalized = analysis_results()$normalized_results[analysis_results()$normalized_results$plate_id == selected, , drop = FALSE]
+    )
+  })
+
   output$run_status <- renderUI({
     res <- analysis_results()
     if (is.null(res)) return(tagList(status_badge("NOT RUN"), p(class = "small-note", paste("Version", APP_VERSION))))
@@ -915,10 +944,10 @@ server <- function(input, output, session) {
   output$final_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$final_qc_table, "final_status", 20) })
   output$qc_report_preview <- renderText({ req(analysis_results()); paste(qc_report_lines(analysis_results()), collapse = "\n") })
 
-  raw_heatmap_obj <- reactive({ req(analysis_results()); plate_heatmap_plot(analysis_results()$cleaned_well_data, "raw_od", "Raw OD by well") })
-  norm_heatmap_obj <- reactive({ req(analysis_results()); plate_heatmap_plot(analysis_results()$normalized_results, "percent_activation", "Percent activation by well") })
-  raw_heatmap_interactive_obj <- reactive({ req(analysis_results()); plate_heatmap_plotly(analysis_results()$cleaned_well_data, "raw_od", "Raw OD by well") })
-  norm_heatmap_interactive_obj <- reactive({ req(analysis_results()); plate_heatmap_plotly(analysis_results()$normalized_results, "percent_activation", "Percent activation by well") })
+  raw_heatmap_obj <- reactive({ req(selected_layout_data()); plate_heatmap_plot(selected_layout_data()$cleaned, "raw_od", "Raw OD by well") })
+  norm_heatmap_obj <- reactive({ req(selected_layout_data()); plate_heatmap_plot(selected_layout_data()$normalized, "percent_activation", "Percent activation by well") })
+  raw_heatmap_interactive_obj <- reactive({ req(selected_layout_data()); plate_heatmap_plotly(selected_layout_data()$cleaned, "raw_od", "Raw OD by well") })
+  norm_heatmap_interactive_obj <- reactive({ req(selected_layout_data()); plate_heatmap_plotly(selected_layout_data()$normalized, "percent_activation", "Percent activation by well") })
   qc_plot_obj <- reactive({ req(analysis_results()); qc_bar_plot(analysis_results()$plate_qc) })
   raw_distribution_obj <- reactive({ req(analysis_results()); raw_distribution_plot(analysis_results()$cleaned_well_data) })
   waterfall_obj <- reactive({ req(analysis_results()); waterfall_plot(analysis_results()$primary_results) })

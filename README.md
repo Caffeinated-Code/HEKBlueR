@@ -4,6 +4,8 @@ HEKBlueR is a self-service R Shiny app and Nextflow pipeline for HEK-Blue screen
 
 It helps biologists upload raw plate-reader data, run automated QC, review primary and secondary screening results, detect likely artifacts, and export reproducible tables.
 
+Public app: [https://caffeinated-code.shinyapps.io/HEKBlueR/](https://caffeinated-code.shinyapps.io/HEKBlueR/)
+
 ## What It Does
 
 - imports raw HEK-Blue plate-reader data
@@ -107,10 +109,9 @@ AWS Batch profiles are included in `nextflow.config`.
 | Cleaned Data | inspect cleaning actions, outliers, and cleaned wells |
 | Metadata | review run documentation completeness |
 | Design QC | check controls, replicates, dose points, and calibrators |
-| QC Thresholds | inspect the active rules used to assign QC status |
 | Plate QC | review Z-prime, CV, SSMD, edge effects, and plate bias |
 | Reference & Calibration | review reference control stability and inter-plate calibration |
-| Plate Layout | inspect raw and normalized heatmaps |
+| Plate Layout | inspect one plate at a time with raw and normalized heatmaps |
 | Primary Results | review activation, inhibition, and hit calls |
 | Secondary Curves | review EC50 or IC50 and curve QC |
 | Counter-Assays | review cytotoxicity and assay-interference flags |
