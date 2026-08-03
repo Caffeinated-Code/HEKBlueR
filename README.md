@@ -68,6 +68,14 @@ Rscript scripts/run_pipeline_cli.R \
   --out results/demo_cli
 ```
 
+## Run Robustness Checks
+
+```bash
+Rscript scripts/robustness_checks.R
+```
+
+This checks common upload cases, partial assay modules, flexible column names, `A1` versus `A01` well labels, raw-only annotated files, missing controls, nonnumeric OD values, duplicate wells, invalid wells, and missing required fields.
+
 ## Run With Nextflow
 
 ```bash

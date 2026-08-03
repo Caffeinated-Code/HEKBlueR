@@ -1,7 +1,44 @@
-safe_mean <- function(x) mean(x, na.rm = TRUE)
-safe_sd <- function(x) stats::sd(x, na.rm = TRUE)
-safe_median <- function(x) stats::median(x, na.rm = TRUE)
-safe_mad <- function(x) stats::mad(x, constant = 1.4826, na.rm = TRUE)
+safe_mean <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (!length(x)) return(NA_real_)
+  mean(x)
+}
+
+safe_sd <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (length(x) < 2) return(NA_real_)
+  stats::sd(x)
+}
+
+safe_median <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (!length(x)) return(NA_real_)
+  stats::median(x)
+}
+
+safe_mad <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (!length(x)) return(NA_real_)
+  stats::mad(x, constant = 1.4826)
+}
+
+safe_min <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (!length(x)) return(NA_real_)
+  min(x)
+}
+
+safe_max <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[is.finite(x)]
+  if (!length(x)) return(NA_real_)
+  max(x)
+}
 
 cv_percent <- function(x) {
   m <- safe_mean(x)
@@ -50,12 +87,15 @@ edge_effect_score <- function(df, value_col = "blank_corrected_od") {
 row_bias_score <- function(df, value_col = "blank_corrected_od") {
   vals <- tapply(df[[value_col]], df$row, safe_median)
   if (length(vals) < 2) return(NA_real_)
-  max(vals, na.rm = TRUE) - min(vals, na.rm = TRUE)
+  vals <- vals[is.finite(vals)]
+  if (length(vals) < 2) return(NA_real_)
+  max(vals) - min(vals)
 }
 
 col_bias_score <- function(df, value_col = "blank_corrected_od") {
   vals <- tapply(df[[value_col]], df$col, safe_median)
   if (length(vals) < 2) return(NA_real_)
-  max(vals, na.rm = TRUE) - min(vals, na.rm = TRUE)
+  vals <- vals[is.finite(vals)]
+  if (length(vals) < 2) return(NA_real_)
+  max(vals) - min(vals)
 }
-

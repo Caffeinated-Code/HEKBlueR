@@ -2,6 +2,176 @@ source_if_needed <- function(path) {
   if (file.exists(path)) source(path)
 }
 
+normalize_column_names <- function(df) {
+  names(df) <- tolower(gsub("[^A-Za-z0-9]+", "_", trimws(names(df))))
+  names(df) <- gsub("^_|_$", "", names(df))
+  df
+}
+
+first_present <- function(df, candidates) {
+  hit <- intersect(candidates, names(df))
+  if (length(hit)) hit[[1]] else NA_character_
+}
+
+rename_first_present <- function(df, canonical, candidates) {
+  if (canonical %in% names(df)) return(df)
+  hit <- first_present(df, candidates)
+  if (!is.na(hit)) names(df)[names(df) == hit] <- canonical
+  df
+}
+
+normalize_well <- function(x) {
+  x <- toupper(trimws(as.character(x)))
+  x <- gsub("[^A-H0-9]", "", x)
+  row <- substr(x, 1, 1)
+  col <- suppressWarnings(as.integer(gsub("^[A-H]", "", x)))
+  ifelse(row %in% LETTERS[1:8] & !is.na(col) & col >= 1 & col <= 12, paste0(row, sprintf("%02d", col)), NA_character_)
+}
+
+standardize_control_type <- function(x) {
+  y <- tolower(trimws(as.character(x)))
+  y <- gsub("[^a-z0-9]+", "_", y)
+  y <- gsub("^_|_$", "", y)
+  synonyms <- c(
+    vehicle = "negative_control",
+    veh = "negative_control",
+    mock = "negative_control",
+    untreated = "negative_control",
+    untreated_control = "negative_control",
+    neg = "negative_control",
+    negative = "negative_control",
+    blank_control = "blank",
+    media = "blank",
+    medium = "blank",
+    pos = "positive_control",
+    positive = "positive_control",
+    positive_agonist = "positive_control",
+    agonist_challenge = "agonist_challenge_control",
+    antagonist_control = "known_antagonist_control",
+    known_antagonist = "known_antagonist_control",
+    ipc = "inter_plate_calibrator",
+    calibrator = "inter_plate_calibrator",
+    test = "test_sample",
+    treatment = "test_sample",
+    compound = "test_sample",
+    sample = "test_sample",
+    viability = "viability_counter",
+    cytotoxicity = "viability_counter",
+    no_cell = "no_cell_interference",
+    unrelated = "unrelated_reporter",
+    null_cell = "null_cell_reporter",
+    empty_well = "empty"
+  )
+  out <- unname(synonyms[y])
+  out[is.na(out)] <- y[is.na(out)]
+  out[is.na(out) | out == ""] <- "unknown"
+  out
+}
+
+standardize_assay_mode <- function(x, control_type = NULL) {
+  y <- tolower(trimws(as.character(x)))
+  y <- gsub("[^a-z0-9]+", "_", y)
+  y[y %in% c("activation", "agonism", "agonist_screen")] <- "agonist"
+  y[y %in% c("inhibition", "antagonism", "antagonist_screen")] <- "antagonist"
+  y[y %in% c("counter_assay", "counterassay", "artifact", "viability")] <- "counter"
+  y[is.na(y) | y == ""] <- "unknown"
+  if (!is.null(control_type)) {
+    y[control_type %in% c("viability_counter", "no_cell_interference", "unrelated_reporter", "null_cell_reporter")] <- "counter"
+  }
+  y
+}
+
+standardize_assay_stage <- function(x, assay_mode = NULL) {
+  y <- tolower(trimws(as.character(x)))
+  y <- gsub("[^a-z0-9]+", "_", y)
+  y[y %in% c("primary_screen", "screen", "fixed_dose")] <- "primary"
+  y[y %in% c("secondary_confirmation", "confirmation", "dose_response", "curve")] <- "secondary"
+  y[y %in% c("counter_assay", "counterassay", "artifact")] <- "counter"
+  y[is.na(y) | y == ""] <- "unknown"
+  if (!is.null(assay_mode)) y[assay_mode == "counter"] <- "counter"
+  y
+}
+
+standardize_metadata <- function(metadata) {
+  if (is.null(metadata) || !is.data.frame(metadata) || !nrow(metadata)) {
+    return(data.frame(field = character(), value = character(), required = logical(), stringsAsFactors = FALSE))
+  }
+  metadata <- normalize_column_names(metadata)
+  metadata <- rename_first_present(metadata, "field", c("metadata_field", "parameter", "key", "name"))
+  metadata <- rename_first_present(metadata, "value", c("metadata_value", "val"))
+  if (!"field" %in% names(metadata) || !"value" %in% names(metadata)) {
+    if (nrow(metadata) == 1) {
+      metadata <- data.frame(field = names(metadata), value = as.character(unlist(metadata[1, ], use.names = FALSE)), stringsAsFactors = FALSE)
+    } else {
+      stop("Metadata must contain field and value columns, or be a one-row wide metadata table.", call. = FALSE)
+    }
+  }
+  if (!"required" %in% names(metadata)) metadata$required <- FALSE
+  metadata$field <- tolower(gsub("[^A-Za-z0-9]+", "_", trimws(as.character(metadata$field))))
+  metadata$field <- gsub("^_|_$", "", metadata$field)
+  metadata$value <- trimws(as.character(metadata$value))
+  metadata$required <- metadata$required %in% c(TRUE, "TRUE", "true", "1", "yes", "YES", "required", "Required")
+  metadata[, c("field", "value", "required"), drop = FALSE]
+}
+
+standardize_well_table <- function(df, table_name = "raw data") {
+  if (is.null(df) || !is.data.frame(df) || !nrow(df)) stop(table_name, " is empty.", call. = FALSE)
+  df <- normalize_column_names(df)
+  df <- rename_first_present(df, "plate_id", c("plate", "plate_name", "barcode", "plate_barcode"))
+  df <- rename_first_present(df, "well", c("well_id", "well_position", "position"))
+  df <- rename_first_present(df, "raw_od", c("od", "od655", "od_655", "absorbance", "absorbance_655", "value", "signal"))
+  df <- rename_first_present(df, "sample_id", c("sample", "sample_name", "compound_id", "compound", "cpd_id", "treatment_id"))
+  df <- rename_first_present(df, "peptide_id", c("peptide", "compound", "compound_id", "cpd_id", "treatment"))
+  df <- rename_first_present(df, "control_type", c("well_role", "role", "sample_type", "type"))
+  df <- rename_first_present(df, "concentration_uM", c("concentration", "conc", "dose", "dose_um", "concentration_um", "concentration_umol", "concentration_umol_l"))
+  df <- rename_first_present(df, "assay_mode", c("mode", "direction", "assay_direction"))
+  df <- rename_first_present(df, "assay_stage", c("stage", "assay_module", "module", "screen_stage"))
+  missing_core <- setdiff(c("plate_id", "well"), names(df))
+  if (length(missing_core)) stop(table_name, " is missing required column(s): ", paste(missing_core, collapse = ", "), call. = FALSE)
+  df$plate_id <- trimws(as.character(df$plate_id))
+  df$well <- normalize_well(df$well)
+  if (any(is.na(df$well))) stop(table_name, " contains invalid well IDs. Use A01-H12 or A1-H12 style wells.", call. = FALSE)
+  if (!"control_type" %in% names(df)) df$control_type <- "test_sample"
+  df$control_type <- standardize_control_type(df$control_type)
+  if (!"assay_mode" %in% names(df)) df$assay_mode <- "unknown"
+  df$assay_mode <- standardize_assay_mode(df$assay_mode, df$control_type)
+  if (!"assay_stage" %in% names(df)) df$assay_stage <- "unknown"
+  df$assay_stage <- standardize_assay_stage(df$assay_stage, df$assay_mode)
+  if (!"sample_id" %in% names(df)) df$sample_id <- ifelse(df$control_type == "test_sample", df$well, df$control_type)
+  if (!"peptide_id" %in% names(df)) df$peptide_id <- NA_character_
+  if (!"expected_activity" %in% names(df)) df$expected_activity <- NA_character_
+  if (!"concentration_uM" %in% names(df)) df$concentration_uM <- NA_real_
+  if (!"technical_replicate" %in% names(df)) df$technical_replicate <- NA_integer_
+  if (!"biological_replicate" %in% names(df)) df$biological_replicate <- 1L
+  df$row <- substr(df$well, 1, 1)
+  df$col <- substr(df$well, 2, 3)
+  df$concentration_uM <- suppressWarnings(as.numeric(df$concentration_uM))
+  df$technical_replicate <- suppressWarnings(as.integer(df$technical_replicate))
+  df$biological_replicate <- suppressWarnings(as.integer(df$biological_replicate))
+  text_cols <- intersect(c("plate_id", "sample_id", "peptide_id", "expected_activity", "target_id"), names(df))
+  for (col in text_cols) df[[col]] <- trimws(as.character(df[[col]]))
+  if ("raw_od" %in% names(df)) df$raw_od <- suppressWarnings(as.numeric(df$raw_od))
+  df <- df[!is.na(df$plate_id) & df$plate_id != "" & !is.na(df$well), , drop = FALSE]
+  df
+}
+
+prepare_hekblue_inputs <- function(raw_data, plate_map = NULL, metadata = NULL) {
+  metadata <- standardize_metadata(metadata)
+  raw_data <- standardize_well_table(raw_data, "raw data")
+  if (!"raw_od" %in% names(raw_data)) stop("raw data is missing required column: raw_od.", call. = FALSE)
+  if (all(is.na(raw_data$raw_od))) stop("raw data has no numeric raw_od values.", call. = FALSE)
+  if (any(duplicated(paste(raw_data$plate_id, raw_data$well)))) stop("raw data contains duplicate plate_id + well rows.", call. = FALSE)
+  if (is.null(plate_map) || !is.data.frame(plate_map) || !nrow(plate_map)) {
+    plate_map <- raw_data
+  } else {
+    plate_map <- standardize_well_table(plate_map, "plate map")
+  }
+  if (any(duplicated(paste(plate_map$plate_id, plate_map$well)))) stop("plate map contains duplicate plate_id + well rows.", call. = FALSE)
+  missing_map <- setdiff(paste(raw_data$plate_id, raw_data$well), paste(plate_map$plate_id, plate_map$well))
+  if (length(missing_map)) stop("plate map is missing ", length(missing_map), " raw data well(s).", call. = FALSE)
+  list(raw_data = raw_data, plate_map = plate_map, metadata = metadata)
+}
+
 enrich_raw_with_plate_map <- function(raw_data, plate_map) {
   join_cols <- intersect(c("plate_id", "well"), intersect(names(raw_data), names(plate_map)))
   if (!all(c("plate_id", "well") %in% join_cols)) return(raw_data)
@@ -205,9 +375,15 @@ clean_well_data <- function(raw_data) {
   df <- raw_data
   df$row <- substr(df$well, 1, 1)
   df$col <- substr(df$well, 2, 3)
-  blanks <- aggregate(raw_od ~ plate_id, df[df$control_type == "blank", ], safe_median)
-  names(blanks)[2] <- "blank_od"
+  blank_rows <- df[df$control_type == "blank", , drop = FALSE]
+  if (nrow(blank_rows)) {
+    blanks <- aggregate(raw_od ~ plate_id, blank_rows, safe_median)
+    names(blanks)[2] <- "blank_od"
+  } else {
+    blanks <- data.frame(plate_id = unique(df$plate_id), blank_od = 0, stringsAsFactors = FALSE)
+  }
   df <- merge(df, blanks, by = "plate_id", all.x = TRUE)
+  df$blank_od[is.na(df$blank_od)] <- 0
   df$blank_corrected_od <- df$raw_od - df$blank_od
   df$saturated_flag <- !is.na(df$raw_od) & df$raw_od >= 3
   df$negative_corrected_flag <- !is.na(df$blank_corrected_od) & df$blank_corrected_od < -0.02
@@ -262,6 +438,7 @@ input_eda <- function(raw_data, plate_map) {
 
 raw_data_summary <- function(raw_data) {
   assay_modes <- if ("assay_mode" %in% names(raw_data)) paste(sort(unique(raw_data$assay_mode)), collapse = ";") else ""
+  raw_od_values <- if ("raw_od" %in% names(raw_data)) raw_data$raw_od else numeric()
   data.frame(
     metric = c(
       "rows",
@@ -285,9 +462,9 @@ raw_data_summary <- function(raw_data) {
       if ("concentration_uM" %in% names(raw_data)) length(unique(raw_data$concentration_uM[!is.na(raw_data$concentration_uM)])) else NA_integer_,
       if ("technical_replicate" %in% names(raw_data)) paste(sort(unique(raw_data$technical_replicate[!is.na(raw_data$technical_replicate)])), collapse = ";") else "",
       if ("biological_replicate" %in% names(raw_data)) paste(sort(unique(raw_data$biological_replicate[!is.na(raw_data$biological_replicate)])), collapse = ";") else "",
-      if ("raw_od" %in% names(raw_data)) round(min(raw_data$raw_od, na.rm = TRUE), 4) else NA_real_,
-      if ("raw_od" %in% names(raw_data)) round(safe_median(raw_data$raw_od), 4) else NA_real_,
-      if ("raw_od" %in% names(raw_data)) round(max(raw_data$raw_od, na.rm = TRUE), 4) else NA_real_
+      round(safe_min(raw_od_values), 4),
+      round(safe_median(raw_od_values), 4),
+      round(safe_max(raw_od_values), 4)
     ),
     interpretation = c(
       "Total uploaded well-level records.",
@@ -358,6 +535,7 @@ metadata_completeness <- function(metadata, thresholds = default_qc_thresholds()
 }
 
 validate_design <- function(plate_map, metadata, thresholds = default_qc_thresholds()) {
+  if (is.null(plate_map) || !nrow(plate_map)) return(data.frame())
   controls <- split(plate_map, plate_map$plate_id)
   out <- lapply(names(controls), function(pid) {
     x <- controls[[pid]]
@@ -469,6 +647,7 @@ validate_design <- function(plate_map, metadata, thresholds = default_qc_thresho
 }
 
 calculate_plate_qc <- function(cleaned, thresholds = default_qc_thresholds()) {
+  if (is.null(cleaned) || !nrow(cleaned)) return(data.frame())
   plates <- split(cleaned, cleaned$plate_id)
   out <- lapply(names(plates), function(pid) {
     x <- plates[[pid]]
@@ -477,7 +656,8 @@ calculate_plate_qc <- function(cleaned, thresholds = default_qc_thresholds()) {
     blank <- x$raw_od[x$control_type == "blank"]
     zp <- z_prime(pos, neg)
     rzp <- robust_z_prime(pos, neg)
-    sb <- safe_mean(pos) / max(safe_mean(neg), .Machine$double.eps)
+    neg_mean <- safe_mean(neg)
+    sb <- ifelse(is.na(neg_mean) || abs(neg_mean) < .Machine$double.eps, NA_real_, safe_mean(pos) / abs(neg_mean))
     signal_window <- safe_mean(pos) - safe_mean(neg)
     edge <- edge_effect_score(x)
     row_bias <- row_bias_score(x)
@@ -532,6 +712,7 @@ calculate_plate_qc <- function(cleaned, thresholds = default_qc_thresholds()) {
 }
 
 intraplate_variability_qc <- function(cleaned, thresholds = default_qc_thresholds()) {
+  if (is.null(cleaned) || !nrow(cleaned)) return(data.frame())
   plates <- split(cleaned, cleaned$plate_id)
   out <- lapply(names(plates), function(pid) {
     x <- plates[[pid]]
@@ -540,7 +721,8 @@ intraplate_variability_qc <- function(cleaned, thresholds = default_qc_threshold
     edge <- edge_effect_score(x)
     row_bias <- row_bias_score(x)
     col_bias <- col_bias_score(x)
-    outlier_rate <- 100 * mean(x$outlier_flag | x$saturated_flag | x$negative_corrected_flag | x$missing_flag, na.rm = TRUE)
+    flagged <- x$outlier_flag | x$saturated_flag | x$negative_corrected_flag | x$missing_flag
+    outlier_rate <- if (length(flagged)) 100 * mean(flagged, na.rm = TRUE) else NA_real_
     status <- "PASS"
     notes <- character()
     if (!is.na(control_cv) && control_cv > thresholds$plate$intraplate_cv_warn_percent) {
@@ -619,6 +801,7 @@ interplate_calibration <- function(cleaned, thresholds = default_qc_thresholds()
 }
 
 normalize_responses <- function(cleaned) {
+  if (is.null(cleaned) || !nrow(cleaned)) return(data.frame())
   plates <- split(cleaned, cleaned$plate_id)
   out <- lapply(plates, function(x) {
     value_col <- if ("calibrated_od" %in% names(x)) "calibrated_od" else "blank_corrected_od"
@@ -628,8 +811,8 @@ normalize_responses <- function(cleaned) {
     antagonist <- safe_median(x[[value_col]][x$control_type == "known_antagonist_control"])
     denom_activation <- pos - neg
     denom_inhibition <- agonist - antagonist
-    x$percent_activation <- 100 * (x[[value_col]] - neg) / denom_activation
-    x$percent_inhibition <- 100 * (agonist - x[[value_col]]) / denom_inhibition
+    x$percent_activation <- if (is.na(denom_activation) || abs(denom_activation) < .Machine$double.eps) NA_real_ else 100 * (x[[value_col]] - neg) / denom_activation
+    x$percent_inhibition <- if (is.na(denom_inhibition) || abs(denom_inhibition) < .Machine$double.eps) NA_real_ else 100 * (agonist - x[[value_col]]) / denom_inhibition
     x
   })
   do.call(rbind, out)
@@ -718,11 +901,11 @@ fit_one_curve <- function(df, response_col) {
   y <- df[[response_col]]
   x <- df$concentration_uM
   start <- list(bottom = min(y), top = max(y), ec50 = stats::median(x), hill = 1)
-  fit <- try(stats::nls(
+  fit <- suppressWarnings(try(stats::nls(
     y ~ bottom + (top - bottom) / (1 + (ec50 / x)^hill),
     start = start,
     control = stats::nls.control(maxiter = 200, warnOnly = TRUE)
-  ), silent = TRUE)
+  ), silent = TRUE))
   if (inherits(fit, "try-error")) return(NULL)
   pred <- stats::predict(fit)
   list(coef = coef(fit), rmse = sqrt(mean((y - pred)^2, na.rm = TRUE)), residual_max = max(abs(y - pred), na.rm = TRUE))
@@ -744,8 +927,8 @@ fit_dose_response <- function(primary, thresholds = default_qc_thresholds()) {
     fit <- fit_one_curve(x, response_col)
     response <- x[[response_col]]
     n_dose_points <- length(unique(x$concentration_uM[is.finite(x$concentration_uM)]))
-    response_min <- min(response, na.rm = TRUE)
-    response_max <- max(response, na.rm = TRUE)
+    response_min <- safe_min(response)
+    response_max <- safe_max(response)
     dynamic_range <- response_max - response_min
     ordered_x <- x[order(x$concentration_uM), ]
     ordered_response <- ordered_x[[response_col]]
@@ -765,8 +948,8 @@ fit_dose_response <- function(primary, thresholds = default_qc_thresholds()) {
       next
     }
     coef <- fit$coef
-    dose_min <- min(x$concentration_uM, na.rm = TRUE)
-    dose_max <- max(x$concentration_uM, na.rm = TRUE)
+    dose_min <- safe_min(x$concentration_uM)
+    dose_max <- safe_max(x$concentration_uM)
     flags <- character()
     ec50_in_range <- coef["ec50"] >= dose_min && coef["ec50"] <= dose_max
     top_plateau <- abs(response_max - coef["top"]) <= thresholds$curve$plateau_tolerance_percent
@@ -838,6 +1021,12 @@ counter_assay_qc <- function(normalized, thresholds = default_qc_thresholds()) {
 
 sample_qc_summary <- function(primary, dose_qc, counter_qc) {
   if (!nrow(primary)) return(data.frame())
+  if (!nrow(dose_qc)) {
+    dose_qc <- data.frame(target_id = character(), peptide_id = character(), assay_mode = character(), curve_qc_status = character(), stringsAsFactors = FALSE)
+  }
+  if (!nrow(counter_qc)) {
+    counter_qc <- data.frame(target_id = character(), peptide_id = character(), counter_qc_status = character(), artifact_flags = character(), stringsAsFactors = FALSE)
+  }
   groups <- unique(primary[c("target_id", "peptide_id", "assay_mode")])
   out <- lapply(seq_len(nrow(groups)), function(i) {
     key <- groups[i, ]
@@ -865,11 +1054,12 @@ sample_qc_summary <- function(primary, dose_qc, counter_qc) {
       reasons <- c(reasons, "counter-assay artifact flag")
     }
     active_cv <- ifelse(p_primary$assay_mode == "antagonist", p_primary$inhibition_cv, p_primary$activation_cv)
+    max_cv <- safe_max(active_cv)
     data.frame(
       key,
       sample_status = sample_status,
       n_doses = length(unique(p_primary$concentration_uM)),
-      max_replicate_cv = round(max(active_cv, na.rm = TRUE), 4),
+      max_replicate_cv = round(max_cv, 4),
       hit_calls = paste(unique(p_primary$primary_hit[p_primary$primary_hit != "NO_HIT"]), collapse = ";"),
       curve_status = ifelse(nrow(p_curve), paste(unique(p_curve$curve_qc_status), collapse = ";"), "NOT_RUN"),
       artifact_flags = ifelse(nrow(p_counter), paste(unique(p_counter$artifact_flags), collapse = ";"), "NOT_TESTED"),
@@ -884,6 +1074,12 @@ sample_qc_summary <- function(primary, dose_qc, counter_qc) {
 }
 
 make_final_qc <- function(design_qc, plate_qc, dose_qc, counter_qc, primary) {
+  if (!nrow(dose_qc)) {
+    dose_qc <- data.frame(target_id = character(), peptide_id = character(), curve_qc_status = character(), stringsAsFactors = FALSE)
+  }
+  if (!nrow(counter_qc)) {
+    counter_qc <- data.frame(target_id = character(), peptide_id = character(), counter_qc_status = character(), artifact_flags = character(), stringsAsFactors = FALSE)
+  }
   if (!nrow(primary)) {
     base <- data.frame(
       design_overall = ifelse(nrow(design_qc) && any(design_qc$design_status == "FAIL"), "FAIL", ifelse(nrow(design_qc) && any(design_qc$design_status == "WARN"), "WARN", "PASS")),
@@ -941,6 +1137,10 @@ make_final_qc <- function(design_qc, plate_qc, dose_qc, counter_qc, primary) {
 }
 
 run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NULL, thresholds = default_qc_thresholds(), threshold_change_note = "") {
+  prepared <- prepare_hekblue_inputs(raw_data, plate_map, metadata)
+  raw_data <- prepared$raw_data
+  plate_map <- prepared$plate_map
+  metadata <- prepared$metadata
   manifest <- assay_manifest(raw_data, plate_map, metadata, thresholds, threshold_change_note)
   raw_data <- enrich_raw_with_plate_map(raw_data, plate_map)
   raw_data <- fill_target_id(raw_data, metadata)
