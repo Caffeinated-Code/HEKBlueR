@@ -204,6 +204,48 @@ dose_glossary <- data.frame(
 
 threshold_glossary <- qc_threshold_table()
 
+reference_qc_display_table <- function(df) {
+  if (is.null(df) || !nrow(df)) return(data.frame())
+  drop_cols <- grep("(_threshold$|^min_wells_threshold$)", names(df), value = TRUE)
+  df[, setdiff(names(df), drop_cols), drop = FALSE]
+}
+
+reference_stability_rationale_table <- function(thresholds = default_qc_thresholds()) {
+  data.frame(
+    component = c("Well count", "Control CV", "Calibration drift", "Spatial bias", "Outlier rate"),
+    weight_percent = c(25, 25, 25, 15, 10),
+    pass_rule = c(
+      paste0(">= ", thresholds$design$control_wells_pass, " wells"),
+      paste0("<= ", thresholds$plate$control_cv_warn_percent, "%"),
+      paste0("<= ", thresholds$plate$calibration_drift_warn_od, " OD"),
+      paste0("<= ", thresholds$plate$spatial_bias_warn),
+      paste0("<= ", thresholds$plate$outlier_rate_warn_percent, "% wells")
+    ),
+    warn_rule = c(
+      paste0(thresholds$design$control_wells_fail, " to ", thresholds$design$control_wells_pass - 1, " wells"),
+      paste0("> ", thresholds$plate$control_cv_warn_percent, "% to ", thresholds$plate$control_cv_fail_percent, "%"),
+      paste0("> ", thresholds$plate$calibration_drift_warn_od, " to ", thresholds$plate$calibration_drift_fail_od, " OD"),
+      paste0("> ", thresholds$plate$spatial_bias_warn, " to ", thresholds$plate$spatial_bias_fail),
+      paste0("> ", thresholds$plate$outlier_rate_warn_percent, "% to ", thresholds$plate$outlier_rate_fail_percent, "% wells")
+    ),
+    fail_rule = c(
+      paste0("< ", thresholds$design$control_wells_fail, " wells"),
+      paste0("> ", thresholds$plate$control_cv_fail_percent, "%"),
+      paste0("> ", thresholds$plate$calibration_drift_fail_od, " OD"),
+      paste0("> ", thresholds$plate$spatial_bias_fail),
+      paste0("> ", thresholds$plate$outlier_rate_fail_percent, "% wells")
+    ),
+    rationale = c(
+      "Too few wells makes a control median fragile.",
+      "High control CV points to unstable pipetting, biology, incubation, or readout.",
+      "Large drift means the shared reference no longer supports plate alignment.",
+      "Spatial bias can make local wells look active or inactive for non-biological reasons.",
+      "A high flagged-well burden weakens confidence in the plate context."
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
 threshold_input <- function(id, label, value, min, max, step = NULL) {
   numericInput(id, label = tagList(label, span(class = "safe-range", paste0("Recommended ", min, " to ", max))), value = value, min = min, max = max, step = step %||% ifelse(max <= 2, 0.01, 1))
 }
@@ -602,6 +644,7 @@ ui <- page_navbar(
     div(class = "section-note", "Reference stability score combines well count 25%, control CV 25%, calibration drift 25%, spatial bias 15%, and outlier rate 10%. PASS is 80 or higher with no component warning. WARN is 50 to 79 or any component warning. FAIL is below 50 or a hard failure in well count, control CV, or calibration drift. Failed controls are dropped from calibration, percent-response, and fold-change calculations. Warning controls are used and flagged."),
     tabsetPanel(
       tabPanel("Reference control stability", card(card_header("Reference control stability"), DTOutput("reference_qc_table"), div(class = "download-row", downloadButton("download_reference_qc_table", "Download reference QC")))),
+      tabPanel("Rationale", card(card_header("Reference stability scoring rationale"), DTOutput("reference_stability_rationale_table")), card(card_header("Reference-control threshold glossary"), DTOutput("reference_threshold_glossary_table"))),
       tabPanel("Inter-plate calibration", card(card_header(tagList("Inter-plate calibration ", metric_link("Inter-plate calibration"))), DTOutput("calibration_table"), div(class = "download-row", downloadButton("download_calibration_table", "Download calibration table")))),
       tabPanel("Calibration drift", card(class = "plot-card", card_header("Calibration drift"), plotlyOutput("calibration_plot", height = "420px"), div(class = "download-row", downloadButton("download_calibration_plot", "Download calibration plot"))))
     )
@@ -976,7 +1019,12 @@ server <- function(input, output, session) {
   output$threshold_table <- renderDT({ status_datatable(qc_threshold_table(thresholds_from_input(input)), NULL, 20) })
   output$plate_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$plate_qc, "plate_qc_status", 10) })
   output$intraplate_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$intraplate_variability_qc, "intraplate_status", 10) })
-  output$reference_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$reference_control_qc, "reference_stability_status", 15) })
+  output$reference_qc_table <- renderDT({ req(analysis_results()); status_datatable(reference_qc_display_table(analysis_results()$reference_control_qc), "reference_stability_status", 15) })
+  output$reference_stability_rationale_table <- renderDT({ status_datatable(reference_stability_rationale_table(thresholds_from_input(input)), NULL, 10) })
+  output$reference_threshold_glossary_table <- renderDT({
+    z <- qc_threshold_table(thresholds_from_input(input))
+    status_datatable(z[z$qc_layer == "Reference control", , drop = FALSE], NULL, 10)
+  })
   output$calibration_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$interplate_calibration, "calibration_status", 10) })
   output$primary_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$primary_results, "primary_status", 20) })
   output$sample_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$sample_qc_table, "sample_status", 20) })
