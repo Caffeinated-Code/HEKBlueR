@@ -756,6 +756,49 @@ intraplate_variability_qc <- function(cleaned, thresholds = default_qc_threshold
   do.call(rbind, out)
 }
 
+score_component <- function(value, good, warn, direction = c("lte", "gte"), missing_grade = "FAIL") {
+  direction <- match.arg(direction)
+  if (is.na(value)) {
+    return(list(points = ifelse(missing_grade == "WARN", 0.5, 0), grade = missing_grade))
+  }
+  if (direction == "lte") {
+    if (value <= good) return(list(points = 1, grade = "PASS"))
+    if (value <= warn) return(list(points = 0.5, grade = "WARN"))
+    return(list(points = 0, grade = "FAIL"))
+  }
+  if (value >= good) return(list(points = 1, grade = "PASS"))
+  if (value >= warn) return(list(points = 0.5, grade = "WARN"))
+  list(points = 0, grade = "FAIL")
+}
+
+reference_stability_row <- function(n_wells, cv_percent_value, calibration_drift_abs, spatial_bias, outlier_rate, thresholds = default_qc_thresholds()) {
+  weights <- c(well_count = 25, control_cv = 25, calibration_drift = 25, spatial_bias = 15, outlier_rate = 10)
+  well <- score_component(n_wells, thresholds$design$control_wells_pass, thresholds$design$control_wells_fail, direction = "gte")
+  cv <- score_component(cv_percent_value, thresholds$plate$control_cv_warn_percent, thresholds$plate$control_cv_fail_percent, direction = "lte")
+  drift <- score_component(calibration_drift_abs, thresholds$plate$calibration_drift_warn_od, thresholds$plate$calibration_drift_fail_od, direction = "lte")
+  spatial <- score_component(spatial_bias, thresholds$plate$spatial_bias_warn, thresholds$plate$spatial_bias_fail, direction = "lte", missing_grade = "WARN")
+  outlier <- score_component(outlier_rate, thresholds$plate$outlier_rate_warn_percent, thresholds$plate$outlier_rate_fail_percent, direction = "lte", missing_grade = "WARN")
+  components <- list(well_count = well, control_cv = cv, calibration_drift = drift, spatial_bias = spatial, outlier_rate = outlier)
+  score <- sum(vapply(names(components), function(name) weights[[name]] * components[[name]]$points, numeric(1)))
+  hard_fail <- well$grade == "FAIL" || cv$grade == "FAIL" || drift$grade == "FAIL"
+  status <- ifelse(
+    hard_fail || score < thresholds$plate$reference_stability_warn_score,
+    "FAIL",
+    ifelse(score >= thresholds$plate$reference_stability_pass_score && !any(vapply(components, function(x) x$grade == "WARN", logical(1))), "PASS", "WARN")
+  )
+  flags <- names(components)[vapply(components, function(x) x$grade != "PASS", logical(1))]
+  list(
+    score = round(score, 1),
+    status = status,
+    flags = ifelse(length(flags), paste(flags, collapse = ";"), "0"),
+    well_count_grade = well$grade,
+    control_cv_grade = cv$grade,
+    calibration_drift_grade = drift$grade,
+    spatial_bias_grade = spatial$grade,
+    outlier_rate_grade = outlier$grade
+  )
+}
+
 reference_control_qc <- function(cleaned, thresholds = default_qc_thresholds()) {
   control_types <- c("negative_control", "positive_control", "agonist_challenge_control", "known_antagonist_control", "inter_plate_calibrator")
   x <- cleaned[cleaned$control_type %in% control_types, ]
@@ -763,56 +806,179 @@ reference_control_qc <- function(cleaned, thresholds = default_qc_thresholds()) 
   agg <- aggregate(blank_corrected_od ~ plate_id + control_type, x, function(v) c(mean = safe_mean(v), median = safe_median(v), cv = cv_percent(v), n = sum(!is.na(v))))
   out <- cbind(agg[c("plate_id", "control_type")], as.data.frame(agg$blank_corrected_od))
   names(out)[3:6] <- c("mean_od", "median_od", "cv_percent", "n_wells")
-  out$status <- ifelse(out$n_wells < thresholds$design$control_wells_fail, "FAIL", ifelse(out$cv_percent > thresholds$plate$control_cv_warn_percent, "WARN", "PASS"))
+  out$global_control_median_od <- ave(out$median_od, out$control_type, FUN = safe_median)
+  out$calibration_drift_od <- out$global_control_median_od - out$median_od
+  out$absolute_calibration_drift_od <- abs(out$calibration_drift_od)
+  plate_spatial <- intraplate_variability_qc(cleaned, thresholds)
+  out$spatial_bias <- NA_real_
+  out$outlier_rate_percent <- NA_real_
+  if (nrow(plate_spatial)) {
+    out$spatial_bias <- pmax(
+      plate_spatial$edge_effect[match(out$plate_id, plate_spatial$plate_id)],
+      plate_spatial$row_bias[match(out$plate_id, plate_spatial$plate_id)],
+      plate_spatial$column_bias[match(out$plate_id, plate_spatial$plate_id)],
+      na.rm = TRUE
+    )
+    out$spatial_bias[!is.finite(out$spatial_bias)] <- NA_real_
+    out$outlier_rate_percent <- plate_spatial$flagged_well_rate_percent[match(out$plate_id, plate_spatial$plate_id)]
+  }
+  stability <- lapply(seq_len(nrow(out)), function(i) {
+    reference_stability_row(out$n_wells[i], out$cv_percent[i], out$absolute_calibration_drift_od[i], out$spatial_bias[i], out$outlier_rate_percent[i], thresholds)
+  })
+  out$reference_stability_score <- vapply(stability, `[[`, numeric(1), "score")
+  out$reference_stability_status <- vapply(stability, `[[`, character(1), "status")
+  out$stability_flags <- vapply(stability, `[[`, character(1), "flags")
+  out$well_count_grade <- vapply(stability, `[[`, character(1), "well_count_grade")
+  out$control_cv_grade <- vapply(stability, `[[`, character(1), "control_cv_grade")
+  out$calibration_drift_grade <- vapply(stability, `[[`, character(1), "calibration_drift_grade")
+  out$spatial_bias_grade <- vapply(stability, `[[`, character(1), "spatial_bias_grade")
+  out$outlier_rate_grade <- vapply(stability, `[[`, character(1), "outlier_rate_grade")
+  out$status <- out$reference_stability_status
   out$min_wells_threshold <- thresholds$design$control_wells_fail
   out$cv_warn_threshold <- thresholds$plate$control_cv_warn_percent
-  out$interpretation <- ifelse(out$status == "PASS", "Control is stable enough for normalization.",
-    ifelse(out$status == "WARN", "Control variability is high. Review plate handling and pipetting.", "Too few control wells for reliable normalization.")
+  out$cv_fail_threshold <- thresholds$plate$control_cv_fail_percent
+  out$calibration_drift_warn_threshold <- thresholds$plate$calibration_drift_warn_od
+  out$calibration_drift_fail_threshold <- thresholds$plate$calibration_drift_fail_od
+  out$reference_stability_pass_threshold <- thresholds$plate$reference_stability_pass_score
+  out$reference_stability_warn_threshold <- thresholds$plate$reference_stability_warn_score
+  out$interpretation <- ifelse(out$status == "PASS", "Control is stable enough for unflagged normalization.",
+    ifelse(out$status == "WARN", "Control is used, but normalized values should carry a stability warning.", "Control is dropped from calibration, percent-response, and fold-change calculations.")
   )
   out
 }
 
-interplate_calibration <- function(cleaned, thresholds = default_qc_thresholds()) {
-  calibrator <- cleaned[cleaned$control_type == "inter_plate_calibrator", ]
-  method <- "inter_plate_calibrator"
-  if (!nrow(calibrator)) {
-    calibrator <- cleaned[cleaned$control_type %in% c("positive_control", "agonist_challenge_control"), ]
-    method <- "shared_positive_control"
+interplate_calibration <- function(cleaned, reference_qc = reference_control_qc(cleaned, thresholds), thresholds = default_qc_thresholds()) {
+  all_plates <- data.frame(plate_id = unique(cleaned$plate_id), stringsAsFactors = FALSE)
+  if (is.null(reference_qc) || !nrow(reference_qc)) {
+    factors <- transform(all_plates, calibration_method = "none", control_type = NA_character_, calibrator_median_od = NA_real_, calibration_factor = 0, reference_stability_score = NA_real_, reference_stability_status = "FAIL", calibration_drift_warn_threshold = thresholds$plate$calibration_drift_warn_od, calibration_status = "WARN", notes = "No reference control QC was available.")
+    return(list(factors = factors, calibrated = transform(cleaned, calibrated_od = blank_corrected_od)))
   }
-  if (!nrow(calibrator)) {
-    return(list(
-      factors = data.frame(plate_id = unique(cleaned$plate_id), calibration_method = "none", calibration_factor = 1, calibration_drift_warn_threshold = thresholds$plate$calibration_drift_warn_od, calibration_status = "WARN", notes = "No shared calibrator or positive control found."),
-      calibrated = transform(cleaned, calibrated_od = blank_corrected_od)
-    ))
+
+  eligible_qc <- reference_qc[reference_qc$reference_stability_status != "FAIL", , drop = FALSE]
+  priority <- c("inter_plate_calibrator", "positive_control", "agonist_challenge_control")
+  chosen_type <- NA_character_
+  for (candidate in priority) {
+    candidate_plates <- unique(eligible_qc$plate_id[eligible_qc$control_type == candidate])
+    if (length(candidate_plates) >= min(2, length(unique(cleaned$plate_id)))) {
+      chosen_type <- candidate
+      break
+    }
   }
-  med <- aggregate(blank_corrected_od ~ plate_id, calibrator, safe_median)
+
+  if (is.na(chosen_type)) {
+    factors <- transform(all_plates, calibration_method = "none", control_type = NA_character_, calibrator_median_od = NA_real_, calibration_factor = 0, reference_stability_score = NA_real_, reference_stability_status = "FAIL", calibration_drift_warn_threshold = thresholds$plate$calibration_drift_warn_od, calibration_status = "WARN", notes = "No eligible shared reference control passed stability screening.")
+    return(list(factors = factors, calibrated = transform(cleaned, calibrated_od = blank_corrected_od)))
+  }
+
+  stable_keys <- paste(eligible_qc$plate_id, eligible_qc$control_type)
+  calibrator <- cleaned[cleaned$control_type == chosen_type & paste(cleaned$plate_id, cleaned$control_type) %in% stable_keys, , drop = FALSE]
+  med <- aggregate(blank_corrected_od ~ plate_id + control_type, calibrator, safe_median)
   global <- safe_median(med$blank_corrected_od)
-  med$calibration_method <- method
+  med$calibration_method <- ifelse(chosen_type == "inter_plate_calibrator", "inter_plate_calibrator", "shared_positive_control")
   med$calibration_factor <- global - med$blank_corrected_od
   med$calibrator_median_od <- med$blank_corrected_od
+  key <- paste(med$plate_id, med$control_type)
+  qc_key <- paste(eligible_qc$plate_id, eligible_qc$control_type)
+  med$reference_stability_score <- eligible_qc$reference_stability_score[match(key, qc_key)]
+  med$reference_stability_status <- eligible_qc$reference_stability_status[match(key, qc_key)]
   med$calibration_drift_warn_threshold <- thresholds$plate$calibration_drift_warn_od
-  med$calibration_status <- ifelse(abs(med$calibration_factor) <= thresholds$plate$calibration_drift_warn_od, "PASS", "WARN")
-  med$notes <- ifelse(med$calibration_status == "PASS", "Plate is aligned with shared reference.", paste("Plate shows calibration drift above", thresholds$plate$calibration_drift_warn_od, "OD."))
+  med$calibration_status <- ifelse(abs(med$calibration_factor) <= thresholds$plate$calibration_drift_warn_od & med$reference_stability_status == "PASS", "PASS", "WARN")
+  med$notes <- ifelse(med$calibration_status == "PASS", "Plate is aligned with a stable shared reference.", "Calibration reference is used with warning; review drift and stability score.")
   med$blank_corrected_od <- NULL
-  calibrated <- merge(cleaned, med[c("plate_id", "calibration_factor")], by = "plate_id", all.x = TRUE)
+
+  factors <- merge(all_plates, med, by = "plate_id", all.x = TRUE, sort = FALSE)
+  factors$calibration_method[is.na(factors$calibration_method)] <- "none_dropped_or_missing"
+  factors$calibration_factor[is.na(factors$calibration_factor)] <- 0
+  factors$reference_stability_status[is.na(factors$reference_stability_status)] <- "FAIL"
+  factors$calibration_status[is.na(factors$calibration_status)] <- "WARN"
+  factors$calibration_drift_warn_threshold[is.na(factors$calibration_drift_warn_threshold)] <- thresholds$plate$calibration_drift_warn_od
+  factors$notes[is.na(factors$notes)] <- "The candidate calibration control failed stability screening or was missing on this plate."
+
+  calibrated <- merge(cleaned, factors[c("plate_id", "calibration_factor")], by = "plate_id", all.x = TRUE)
   calibrated$calibration_factor[is.na(calibrated$calibration_factor)] <- 0
   calibrated$calibrated_od <- calibrated$blank_corrected_od + calibrated$calibration_factor
-  list(factors = med, calibrated = calibrated)
+  list(factors = factors, calibrated = calibrated)
 }
 
-normalize_responses <- function(cleaned) {
+select_stable_control <- function(x, reference_qc, control_types, value_col) {
+  plate <- unique(x$plate_id)[1]
+  empty <- list(value = NA_real_, control_type = NA_character_, status = "FAIL", score = NA_real_, flags = "missing_control")
+  if (is.null(reference_qc) || !nrow(reference_qc)) return(empty)
+  rq <- reference_qc[reference_qc$plate_id == plate & reference_qc$control_type %in% control_types, , drop = FALSE]
+  rq <- rq[rq$reference_stability_status != "FAIL", , drop = FALSE]
+  if (!nrow(rq)) return(empty)
+  rq$priority <- match(rq$control_type, control_types)
+  rq <- rq[order(rq$priority, -rq$reference_stability_score), , drop = FALSE]
+  selected <- rq[1, ]
+  value <- safe_median(x[[value_col]][x$control_type == selected$control_type])
+  if (is.na(value)) return(empty)
+  list(
+    value = value,
+    control_type = selected$control_type,
+    status = selected$reference_stability_status,
+    score = selected$reference_stability_score,
+    flags = selected$stability_flags
+  )
+}
+
+safe_ratio <- function(numerator, denominator) {
+  ifelse(is.na(denominator) | abs(denominator) < .Machine$double.eps | denominator <= 0 | is.na(numerator) | numerator <= 0, NA_real_, numerator / denominator)
+}
+
+normalization_status <- function(...) {
+  statuses <- c(...)
+  if (any(statuses == "FAIL")) return("FAIL")
+  if (any(statuses == "WARN")) return("WARN")
+  "PASS"
+}
+
+normalization_flags <- function(named_statuses) {
+  bad <- names(named_statuses)[named_statuses == "FAIL"]
+  warn <- names(named_statuses)[named_statuses == "WARN"]
+  flags <- c(
+    if (length(bad)) paste0("dropped_failed_or_missing_", bad),
+    if (length(warn)) paste0("warning_", warn)
+  )
+  ifelse(length(flags), paste(flags, collapse = ";"), "0")
+}
+
+normalize_responses <- function(cleaned, reference_qc = NULL) {
   if (is.null(cleaned) || !nrow(cleaned)) return(data.frame())
   plates <- split(cleaned, cleaned$plate_id)
   out <- lapply(plates, function(x) {
     value_col <- if ("calibrated_od" %in% names(x)) "calibrated_od" else "blank_corrected_od"
-    neg <- safe_median(x[[value_col]][x$control_type == "negative_control"])
-    pos <- safe_median(x[[value_col]][x$control_type %in% c("positive_control", "agonist_challenge_control")])
-    agonist <- safe_median(x[[value_col]][x$control_type == "agonist_challenge_control"])
-    antagonist <- safe_median(x[[value_col]][x$control_type == "known_antagonist_control"])
-    denom_activation <- pos - neg
-    denom_inhibition <- agonist - antagonist
-    x$percent_activation <- if (is.na(denom_activation) || abs(denom_activation) < .Machine$double.eps) NA_real_ else 100 * (x[[value_col]] - neg) / denom_activation
-    x$percent_inhibition <- if (is.na(denom_inhibition) || abs(denom_inhibition) < .Machine$double.eps) NA_real_ else 100 * (agonist - x[[value_col]]) / denom_inhibition
+    neg <- select_stable_control(x, reference_qc, "negative_control", value_col)
+    activation_ref <- select_stable_control(x, reference_qc, c("positive_control", "agonist_challenge_control"), value_col)
+    agonist <- select_stable_control(x, reference_qc, "agonist_challenge_control", value_col)
+    antagonist <- select_stable_control(x, reference_qc, "known_antagonist_control", value_col)
+    denom_activation <- activation_ref$value - neg$value
+    denom_inhibition <- agonist$value - antagonist$value
+    x$percent_activation <- if (is.na(denom_activation) || abs(denom_activation) < .Machine$double.eps) NA_real_ else 100 * (x[[value_col]] - neg$value) / denom_activation
+    x$percent_inhibition <- if (is.na(denom_inhibition) || abs(denom_inhibition) < .Machine$double.eps) NA_real_ else 100 * (agonist$value - x[[value_col]]) / denom_inhibition
+    x$fold_change_vs_negative <- safe_ratio(x[[value_col]], neg$value)
+    x$log2_fold_change_vs_negative <- log2(x$fold_change_vs_negative)
+    x$fold_change_vs_activation_reference <- safe_ratio(x[[value_col]], activation_ref$value)
+    x$log2_fold_change_vs_activation_reference <- log2(x$fold_change_vs_activation_reference)
+    x$fold_change_vs_agonist_challenge <- safe_ratio(x[[value_col]], agonist$value)
+    x$log2_fold_change_vs_agonist_challenge <- log2(x$fold_change_vs_agonist_challenge)
+    x$negative_control_type <- neg$control_type
+    x$negative_control_stability_status <- neg$status
+    x$negative_control_stability_score <- neg$score
+    x$activation_reference_control_type <- activation_ref$control_type
+    x$activation_reference_stability_status <- activation_ref$status
+    x$activation_reference_stability_score <- activation_ref$score
+    x$agonist_challenge_control_stability_status <- agonist$status
+    x$known_antagonist_control_stability_status <- antagonist$status
+    x$activation_normalization_status <- normalization_status(negative_control = neg$status, activation_reference = activation_ref$status)
+    x$inhibition_normalization_status <- normalization_status(agonist_challenge_control = agonist$status, known_antagonist_control = antagonist$status)
+    x$fold_change_negative_status <- normalization_status(negative_control = neg$status)
+    x$fold_change_activation_reference_status <- normalization_status(activation_reference = activation_ref$status)
+    x$fold_change_agonist_challenge_status <- normalization_status(agonist_challenge_control = agonist$status)
+    x$activation_normalization_flags <- normalization_flags(c(negative_control = neg$status, activation_reference = activation_ref$status))
+    x$inhibition_normalization_flags <- normalization_flags(c(agonist_challenge_control = agonist$status, known_antagonist_control = antagonist$status))
+    x$fold_change_flags <- normalization_flags(c(negative_control = neg$status, activation_reference = activation_ref$status, agonist_challenge_control = agonist$status))
+    x$normalization_control_status <- ifelse(x$assay_mode == "antagonist", x$inhibition_normalization_status, ifelse(x$assay_mode == "agonist", x$activation_normalization_status, normalization_status(negative_control = neg$status, activation_reference = activation_ref$status)))
+    x$normalization_control_flags <- ifelse(x$assay_mode == "antagonist", x$inhibition_normalization_flags, ifelse(x$assay_mode == "agonist", x$activation_normalization_flags, x$fold_change_flags))
     x
   })
   do.call(rbind, out)
@@ -861,6 +1027,7 @@ summarize_primary <- function(normalized, thresholds = default_qc_thresholds()) 
     "AGONIST_HIT",
     ifelse(assay_mode == "antagonist" & inhibition_mean >= thresholds$primary$antagonist_hit_percent & inhibition_cv <= thresholds$primary$replicate_cv_warn_percent, "ANTAGONIST_HIT", "NO_HIT")
   ))
+  result$primary_hit[is.na(result$primary_hit)] <- "NO_HIT"
   result$observed_direction <- with(result, ifelse(
     activation_mean >= thresholds$primary$agonist_hit_percent & inhibition_mean < thresholds$primary$antagonist_hit_percent,
     "agonist_like",
@@ -1060,7 +1227,7 @@ sample_qc_summary <- function(primary, dose_qc, counter_qc) {
       sample_status = sample_status,
       n_doses = length(unique(p_primary$concentration_uM)),
       max_replicate_cv = round(max_cv, 4),
-      hit_calls = paste(unique(p_primary$primary_hit[p_primary$primary_hit != "NO_HIT"]), collapse = ";"),
+      hit_calls = paste(unique(p_primary$primary_hit[!is.na(p_primary$primary_hit) & p_primary$primary_hit != "NO_HIT"]), collapse = ";"),
       curve_status = ifelse(nrow(p_curve), paste(unique(p_curve$curve_qc_status), collapse = ";"), "NOT_RUN"),
       artifact_flags = ifelse(nrow(p_counter), paste(unique(p_counter$artifact_flags), collapse = ";"), "NOT_TESTED"),
       review_notes = paste(reasons, collapse = "; "),
@@ -1106,7 +1273,7 @@ make_final_qc <- function(design_qc, plate_qc, dose_qc, counter_qc, primary) {
   out <- lapply(seq_len(nrow(peptides)), function(i) {
     key <- peptides[i, ]
     p_primary <- primary[primary$target_id == key$target_id & primary$peptide_id == key$peptide_id, ]
-    true_hits <- unique(p_primary$primary_hit[p_primary$primary_hit != "NO_HIT"])
+    true_hits <- unique(p_primary$primary_hit[!is.na(p_primary$primary_hit) & p_primary$primary_hit != "NO_HIT"])
     hit <- ifelse(length(true_hits), paste(true_hits, collapse = ";"), "NO_HIT")
     p_curve <- dose_qc[dose_qc$target_id == key$target_id & dose_qc$peptide_id == key$peptide_id, , drop = FALSE]
     p_counter <- counter_qc[counter_qc$target_id == key$target_id & counter_qc$peptide_id == key$peptide_id, , drop = FALSE]
@@ -1151,8 +1318,8 @@ run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NUL
   plate <- calculate_plate_qc(cleaned, thresholds)
   intraplate <- intraplate_variability_qc(cleaned, thresholds)
   ref_qc <- reference_control_qc(cleaned, thresholds)
-  calibration <- interplate_calibration(cleaned, thresholds)
-  normalized <- normalize_responses(calibration$calibrated)
+  calibration <- interplate_calibration(cleaned, ref_qc, thresholds)
+  normalized <- normalize_responses(calibration$calibrated, ref_qc)
   primary <- summarize_primary(normalized, thresholds)
   dose <- fit_dose_response(primary, thresholds)
   counter <- counter_assay_qc(normalized, thresholds)
@@ -1179,7 +1346,7 @@ run_hekblue_analysis <- function(raw_data, plate_map, metadata, output_dir = NUL
     dose_response_results = dose$results,
     dose_response_qc = dose$qc,
     counter_assay_qc = counter,
-    hit_calls = primary[primary$primary_hit != "NO_HIT", ],
+    hit_calls = primary[!is.na(primary$primary_hit) & primary$primary_hit != "NO_HIT", ],
     exclusions = exclusions,
     final_qc_table = final
   )

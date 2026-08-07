@@ -111,6 +111,8 @@ Use Plate QC to check:
 
 Open **Reference & Calibration** to check reference control stability and inter-plate calibration. HEKBlueR uses an inter-plate calibrator when available. If not available, it can use shared positive controls for plate alignment review.
 
+Each reference control receives a stability score from 0 to 100. The score combines well count, control CV, calibration drift, spatial bias, and flagged-well rate. Failed controls are dropped from calibration, percent-response, and fold-change calculations. Warning controls are used and flagged in the normalized results.
+
 ## 6. Review Primary Results
 
 Primary Results shows peptide response by dose when dose information is supplied. A true primary screen may use one fixed concentration. Secondary confirmation usually carries the full dose series needed for EC50 or IC50 estimation.
@@ -118,6 +120,8 @@ Primary Results shows peptide response by dose when dose information is supplied
 Agonist mode reports activation.
 
 Antagonist mode reports inhibition.
+
+The normalized results table also reports fold change when the required stable controls are present. Review `fold_change_vs_negative` for activation-style biology and `fold_change_vs_agonist_challenge` for antagonist-style biology.
 
 Open the **Sample QC** subtab for one row per target, peptide, and assay mode. This table reports PASS, WARN, and FAIL calls based on primary replicate noise, dose-response QC, and counter-assay artifacts.
 

@@ -223,11 +223,17 @@ thresholds_from_input <- function(input) {
       z_prime_pass = input$z_prime_pass,
       z_prime_warn = input$z_prime_warn,
       control_cv_warn_percent = input$control_cv_warn_percent,
+      control_cv_fail_percent = default_qc_thresholds()$plate$control_cv_fail_percent,
       edge_effect_warn = input$edge_effect_warn,
       calibration_drift_warn_od = input$calibration_drift_warn_od,
+      calibration_drift_fail_od = default_qc_thresholds()$plate$calibration_drift_fail_od,
       intraplate_cv_warn_percent = input$intraplate_cv_warn_percent,
       spatial_bias_warn = input$spatial_bias_warn,
-      outlier_rate_warn_percent = input$outlier_rate_warn_percent
+      spatial_bias_fail = default_qc_thresholds()$plate$spatial_bias_fail,
+      outlier_rate_warn_percent = input$outlier_rate_warn_percent,
+      outlier_rate_fail_percent = default_qc_thresholds()$plate$outlier_rate_fail_percent,
+      reference_stability_pass_score = input$reference_stability_pass_score,
+      reference_stability_warn_score = input$reference_stability_warn_score
     ),
     primary = list(
       agonist_hit_percent = default_qc_thresholds()$primary$agonist_hit_percent,
@@ -494,7 +500,9 @@ ui <- page_navbar(
           threshold_input("calibration_drift_warn_od", "Inter-plate drift warning (OD)", 0.15, 0.03, 0.5, 0.01),
           threshold_input("intraplate_cv_warn_percent", "Intra-plate CV warning (%)", 20, 5, 35, 1),
           threshold_input("spatial_bias_warn", "Spatial bias warning", 0.15, 0.05, 0.35, 0.01),
-          threshold_input("outlier_rate_warn_percent", "Outlier rate warning (%)", 5, 1, 15, 1)
+          threshold_input("outlier_rate_warn_percent", "Outlier rate warning (%)", 5, 1, 15, 1),
+          threshold_input("reference_stability_pass_score", "Reference stability PASS score", 80, 70, 95, 1),
+          threshold_input("reference_stability_warn_score", "Reference stability WARN floor", 50, 35, 70, 1)
         )
       ),
       tabPanel(
@@ -591,6 +599,7 @@ ui <- page_navbar(
   ),
   nav_panel(
     "Reference & Calibration",
+    div(class = "section-note", "Reference stability score combines well count 25%, control CV 25%, calibration drift 25%, spatial bias 15%, and outlier rate 10%. PASS is 80 or higher with no component warning. WARN is 50 to 79 or any component warning. FAIL is below 50 or a hard failure in well count, control CV, or calibration drift. Failed controls are dropped from calibration, percent-response, and fold-change calculations. Warning controls are used and flagged."),
     tabsetPanel(
       tabPanel("Reference control stability", card(card_header("Reference control stability"), DTOutput("reference_qc_table"), div(class = "download-row", downloadButton("download_reference_qc_table", "Download reference QC")))),
       tabPanel("Inter-plate calibration", card(card_header(tagList("Inter-plate calibration ", metric_link("Inter-plate calibration"))), DTOutput("calibration_table"), div(class = "download-row", downloadButton("download_calibration_table", "Download calibration table")))),
@@ -734,6 +743,10 @@ server <- function(input, output, session) {
       return()
     }
     thresholds <- thresholds_from_input(input)
+    if (thresholds$plate$reference_stability_warn_score >= thresholds$plate$reference_stability_pass_score) {
+      showNotification("Reference stability WARN floor must be lower than the PASS score.", type = "error")
+      return()
+    }
     threshold_note <- trimws(input$threshold_change_note %||% "")
     if (threshold_change_required(thresholds) && !nzchar(threshold_note)) {
       showNotification("Add a threshold change note before running analysis.", type = "error")
@@ -963,7 +976,7 @@ server <- function(input, output, session) {
   output$threshold_table <- renderDT({ status_datatable(qc_threshold_table(thresholds_from_input(input)), NULL, 20) })
   output$plate_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$plate_qc, "plate_qc_status", 10) })
   output$intraplate_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$intraplate_variability_qc, "intraplate_status", 10) })
-  output$reference_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$reference_control_qc, "status", 15) })
+  output$reference_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$reference_control_qc, "reference_stability_status", 15) })
   output$calibration_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$interplate_calibration, "calibration_status", 10) })
   output$primary_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$primary_results, "primary_status", 20) })
   output$sample_qc_table <- renderDT({ req(analysis_results()); status_datatable(analysis_results()$sample_qc_table, "sample_status", 20) })

@@ -31,6 +31,9 @@ metadata <- demo$metadata
 ok("full multi-plate demo", {
   res <- run_hekblue_analysis(raw, plate_map, metadata)
   stopifnot(nrow(res$final_qc_table) == 6)
+  stopifnot(all(c("reference_stability_score", "reference_stability_status", "stability_flags") %in% names(res$reference_control_qc)))
+  stopifnot(all(c("fold_change_vs_negative", "log2_fold_change_vs_negative", "fold_change_vs_activation_reference") %in% names(res$normalized_results)))
+  stopifnot(any(is.finite(res$normalized_results$fold_change_vs_negative), na.rm = TRUE))
 })
 
 ok("small upload demo subset", {
@@ -89,6 +92,19 @@ ok("nonnumeric OD becomes missing QC", {
   bad$raw_od[1] <- "OVER"
   res <- run_hekblue_analysis(bad, plate_map[plate_map$plate_id == "PRIMARY_AGO_B1", ], metadata)
   stopifnot(any(res$cleaned_well_data$missing_flag))
+})
+
+ok("failed negative control is dropped from activation and fold-change normalization", {
+  bad <- raw[raw$plate_id == "PRIMARY_AGO_B1", ]
+  neg_idx <- which(bad$control_type == "negative_control")
+  bad$raw_od[neg_idx] <- rep(c(0.02, 2.5), length.out = length(neg_idx))
+  res <- run_hekblue_analysis(bad, plate_map[plate_map$plate_id == "PRIMARY_AGO_B1", ], metadata)
+  neg_qc <- res$reference_control_qc[res$reference_control_qc$control_type == "negative_control", , drop = FALSE]
+  stopifnot(nrow(neg_qc) > 0)
+  stopifnot(any(neg_qc$reference_stability_status == "FAIL"))
+  stopifnot(all(is.na(res$normalized_results$percent_activation)))
+  stopifnot(all(is.na(res$normalized_results$fold_change_vs_negative)))
+  stopifnot(any(grepl("negative_control", res$normalized_results$normalization_control_flags)))
 })
 
 expect_error("duplicate well rows", {

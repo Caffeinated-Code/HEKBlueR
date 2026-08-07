@@ -42,6 +42,35 @@ Starting thresholds:
 - Control CV above 20 percent needs review.
 - Replicate CV above 20 percent needs review.
 
+## Reference Control Stability
+
+HEKBlueR scores each reference control before it is used for calibration, percent activation, percent inhibition, or fold change.
+
+| Component | Weight | PASS | WARN | FAIL |
+|---|---:|---:|---:|---:|
+| Well count | 25 | >= 8 wells | 4 to 7 wells | < 4 wells |
+| Control CV | 25 | <= 20% | > 20% to 35% | > 35% |
+| Calibration drift | 25 | <= 0.15 OD | > 0.15 to 0.30 OD | > 0.30 OD |
+| Spatial bias | 15 | <= 0.15 | > 0.15 to 0.30 | > 0.30 |
+| Outlier rate | 10 | <= 5% wells | > 5% to 15% wells | > 15% wells |
+
+The combined score is reported as `reference_stability_score`.
+
+- PASS: score is at least 80 and no component has a warning.
+- WARN: score is 50 to 79, or score is at least 80 with one component warning.
+- FAIL: score is below 50, or well count, control CV, or calibration drift has a hard failure.
+
+Failed controls are dropped from calibration and normalization. Warning controls are still used, and their warning status is carried into the normalized table.
+
+Fold-change outputs are calculated when stable denominator controls are available:
+
+- `fold_change_vs_negative`
+- `log2_fold_change_vs_negative`
+- `fold_change_vs_activation_reference`
+- `log2_fold_change_vs_activation_reference`
+- `fold_change_vs_agonist_challenge`
+- `log2_fold_change_vs_agonist_challenge`
+
 ## Dose-Response QC
 
 Flags:

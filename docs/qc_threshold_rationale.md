@@ -9,9 +9,14 @@ HEKBlueR uses conservative defaults for cell-based screening, then lets scientis
 | Z-prime pass | 0.5 | Common HTS benchmark for strong separation between positive and negative controls. |
 | Z-prime warning floor | 0 | Values from 0 to 0.5 are marginal, but may still be reviewable in complex cell-based assays. |
 | Control CV warning | 20% | Common assay guidance target for control stability. |
+| Control CV fail | 35% | Marks a reference control as too variable for normalization. |
+| Calibration drift warning | 0.15 OD | Flags drift large enough to review across plates. |
+| Calibration drift fail | 0.30 OD | Drops a reference control from normalization because the reference no longer behaves as shared. |
 | Intra-plate CV warning | 20% | Extends control CV review to within-plate variability. |
 | Edge or spatial bias warning | 0.15 | Flags edge, row, or column effects large enough to distort well-level interpretation. |
 | Outlier rate warning | 5% | Flags plates with broad well-level review burden. |
+| Reference stability PASS | >= 80 | Combined score is strong enough for unflagged normalization. |
+| Reference stability WARN | 50 to 79 | Control can be used, but normalized values carry a warning. |
 | Primary replicate CV warning | 25% | Keeps primary hit calls stricter than exploratory visualization. |
 | Primary replicate CV fail | 50% | Prevents strong conclusions from highly unstable dose-level replicates. |
 | Dose points pass | 8 | Practical default for secondary curve fitting. |
@@ -31,6 +36,22 @@ HEKBlueR therefore adds `intraplate_variability_qc.csv`, which checks:
 - flagged-well rate
 
 These metrics help identify evaporation, dispense order effects, incubation gradients, reader artifacts, and local outlier burden.
+
+## Reference Stability Score
+
+Reference controls drive percent activation, percent inhibition, fold change, and inter-plate calibration. A single rule is too brittle, so HEKBlueR combines the main control-quality signals into one score.
+
+Weights:
+
+- 25% well count
+- 25% control CV
+- 25% calibration drift
+- 15% spatial bias
+- 10% outlier rate
+
+PASS components receive full points. WARN components receive half points. FAIL components receive zero points. Well count, control CV, and calibration drift are hard-fail components because they directly decide whether a control can support normalization.
+
+Failed controls are not used. Warning controls are used and flagged.
 
 ## Sources
 
